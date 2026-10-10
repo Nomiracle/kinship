@@ -392,6 +392,36 @@ def main() -> int:
                       up_d1[0]["id"] == up_d2[0]["id"] and len(same) == 1,
                       "ids=%s/%s 同 path 行数=%d" % (up_d1[0]["id"], up_d2[0]["id"], len(same)))
 
+        # --- 时间轴编辑面板的图片语义：给**已有**记录补图 / 删记录要连带清盘 ---
+        # 后端一直支持「上传时带 event_id」，但编辑面板此前根本没有入口（图加不进去）。
+        st_s0, s0 = call("GET", "/api/media/storage")
+        base_files = (s0 or {}).get("files", 0)
+        st_e, e_diary = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "text", "event_date": today.isoformat(),
+            "title": PREFIX + "带图日记",
+        })
+        if st_e == 201:
+            created_events.append(e_diary["id"])
+            st_u, up_ev = call("POST", "/api/media",
+                               raw=multipart({"person_id": str(p["id"]),
+                                              "event_id": str(e_diary["id"]),
+                                              "captured_on": today.isoformat()},
+                                             {"file": ("diary.png", png_bytes(900, 600, (200, 30, 30)),
+                                                       "image/png")}))
+            st_tl, tl3 = call("GET", "/api/events?person_id=%d" % p["id"])
+            hit3 = [x for x in (tl3 or {}).get("items", []) if x["id"] == e_diary["id"]]
+            check("编辑场景：给已有记录补图 → 事件列表带回该图（时间轴能显示）",
+                  st_u == 201 and bool(hit3) and len(hit3[0].get("media") or []) == 1,
+                  "upload=%s %s" % (st_u, str(hit3)[:200]))
+
+            call("DELETE", "/api/events/%d" % e_diary["id"], expect=204)
+            created_events.remove(e_diary["id"])
+            st_s1, s1 = call("GET", "/api/media/storage")
+            check("删记录连带清磁盘（不留孤儿图片文件）",
+                  (s1 or {}).get("files", 0) == base_files,
+                  "before=%s with=%s after=%s" % (base_files, (s0 or {}).get("files"),
+                                                   (s1 or {}).get("files")))
+
         # --- 人物编辑（名称 / 别名 / 备注）---
         st, edited = call("PATCH", "/api/persons/%d" % p["id"], {
             "display_name": PREFIX + "伴侣改名",

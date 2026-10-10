@@ -45,6 +45,7 @@ from ..schemas import (
     TodoPatch,
 )
 from ..services.audit import write_audit
+from ..services import media as media_svc
 from ..services import wardrobe as wardrobe_svc
 
 router = APIRouter(prefix="/api", tags=["records"], route_class=CommitRoute)
@@ -319,6 +320,20 @@ def delete_event(event_id: int, session: Session = Depends(get_session)):
         )]
         for w in session.scalars(select(OutfitWear).where(OutfitWear.event_id == event.id)):
             session.delete(w)
+    # 图片：数据库行会被外键级联删掉，但**磁盘文件不会** —— 不显式清就留孤儿
+    # （磁盘只增不减；与删人 / DELETE /api/media 同源处理）。
+    # ★ 文件名 = 内容哈希 → 同一份文件可能被别的行共用（同一张图既挂事件又挂单品），
+    #   所以要先看还有没有别的行引用它，否则会把别人的图一起删掉（真出过事故）。
+    rows = list(session.scalars(select(Media).where(Media.event_id == event.id)))
+    if rows:
+        keep = set()
+        for o in session.scalars(select(Media).where(~Media.id.in_([m.id for m in rows]))):
+            for v in (o.path, o.thumb_path, o.source_path):
+                if v:
+                    keep.add(v)
+        for m in rows:
+            media_svc.delete_files(*[p for p in (m.path, m.thumb_path, m.source_path)
+                                     if p and p not in keep])
     session.delete(event)
     write_audit(session, "event", event_id, "delete")
     if touched:

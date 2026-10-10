@@ -161,6 +161,27 @@
           改日期会同步生理期明细；若目标日期已有记录会报冲突（不会静默失败）。
         </p>
 
+        <!-- 图片：编辑时增删。事件已经存在 → 直接挂 event_id
+             （记录页那边是「先建事件拿 id 再传」，这里不用绕那一圈） -->
+        <div v-if="mediaVisible" class="media-edit">
+          <div class="muted" style="margin-bottom: 6px">
+            图片（可多选、可删、点开看原图；iPhone 拍的 HEIC 会自动转）
+          </div>
+          <div v-if="form.media.length" class="thumbs">
+            <div v-for="m in form.media" :key="m.id" class="thumb-box">
+              <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" @click="openFull(m)" />
+              <!-- 视频不能塞进 <img>（会变破图）：给个带 ▶ 的方块，点开看原片 -->
+              <div v-else class="vthumb" @click="openFull(m)">▶</div>
+              <span class="thumb-del" title="删掉这张" @click="removePhoto(m)">×</span>
+            </div>
+          </div>
+          <van-uploader v-model="fileList" multiple :max-count="9" :preview-size="64" />
+          <p class="muted">新选的图片在点「保存」时上传；删除已有图片立即生效。</p>
+        </div>
+        <p v-else-if="form.media.length" class="muted" style="margin-top: 10px">
+          这个人没开「图片」模块 —— 已挂的 {{ form.media.length }} 张能看不能改。
+        </p>
+
         <van-button block type="primary" style="margin-top: 12px" :loading="saving" @click="save">
           保存
         </van-button>
@@ -210,9 +231,16 @@ const pickCategory = ref('top')
 const newName = ref('')
 const newColor = ref('')
 const wardrobeItems = ref([])
+const fileList = ref([])       // 编辑时新选、待「保存」才上传的图片
 
 const itemsOfCategory = computed(() =>
   wardrobeItems.value.filter((i) => i.category === pickCategory.value && !i.merged_into_id)
+)
+
+// 图片区是否可编辑：该人「图片」模块已知关闭才隐藏（未知 = 加载中/失败 → 不隐藏，
+// 与 lib/modules 的三态约定一致）
+const mediaVisible = computed(
+  () => store.hasModule(Number(form.value?.person_id), 'media') !== false
 )
 
 function typeLabel(key) {
@@ -262,11 +290,14 @@ async function openEdit(e) {
     location: '',
     hours: '',
     overnight: false,
+    // 列表接口已把媒体带回来了 → 直接用，不必再请求一次
+    media: (e.media || []).map((m) => ({ ...m })),
   })
   manualText.value = false
   newItems.value = []
   newName.value = ''
   newColor.value = ''
+  fileList.value = []
   editItems.value = (e.items || []).map((it) => ({
     item_id: it.item_id,
     category: it.category,
@@ -274,6 +305,8 @@ async function openEdit(e) {
     color: it.color,
   }))
   showEdit.value = true
+  // 图片区按这个人的「图片」模块门控 → 惰性拉一次（已缓存则直接命中，不重复请求）
+  store.loadModulesFor(e.person_id)
 
   if (e.type_key === 'outfit') {
     // 编辑穿搭要能改「穿了哪几件」→ 拉这个人的单品清单
@@ -324,6 +357,47 @@ function addNew() {
   newColor.value = ''
 }
 
+// ---- 图片（编辑时）----
+// 删除已有图片是**立即**生效的（和相册页一致）；新选的图片等点「保存」才上传，
+// 这样「取消编辑」不会往库里塞半截数据。
+async function removePhoto(m) {
+  try {
+    await showConfirmDialog({ title: '删掉这张图片', message: '同时删除磁盘文件，确定？' })
+  } catch {
+    return
+  }
+  try {
+    await api.deleteMedia(m.id)
+  } catch (e) {
+    showToast(e.message || '删除失败')
+    return
+  }
+  form.value.media = form.value.media.filter((x) => x.id !== m.id)
+  showToast('已删除')
+  await load() // 时间轴那条记录上的缩略图也要跟着变
+}
+
+async function uploadPickedFiles(f) {
+  if (!fileList.value.length) return 0
+  let ok = 0
+  for (const item of fileList.value) {
+    const raw = item.file || item
+    try {
+      await api.uploadMedia(raw, {
+        person_id: f.person_id || undefined,
+        event_id: f.id,
+        // ★ 用事件日期而不是「今天」：相册按拍摄日排序，用今天会把老照片排到最前面
+        captured_on: f.event_date,
+      })
+      ok += 1
+    } catch (e) {
+      showToast(`${raw.name || '图片'} 上传失败：${e.message}`)
+    }
+  }
+  fileList.value = []
+  return ok
+}
+
 async function save() {
   const f = form.value
   if (!f.event_date) {
@@ -355,7 +429,9 @@ async function save() {
   saving.value = true
   try {
     await api.patchEvent(f.id, patch)
-    showToast('已保存')
+    // 先改后传：万一编辑本身失败（如生理期日期冲突 409），不会留下已上传的孤儿图片
+    const uploaded = await uploadPickedFiles(f)
+    showToast(uploaded ? `已保存，含 ${uploaded} 张图片` : '已保存')
     showEdit.value = false
     await load()
   } catch (e) {
@@ -413,6 +489,37 @@ onMounted(load)
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.media-edit {
+  margin-top: 10px;
+}
+.thumb-box {
+  position: relative;
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+}
+.thumb-box img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+}
+/* 删除按钮要够大够好点（手机上 20px 的 × 点不中） */
+.thumb-del {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 16px;
+  line-height: 24px;
+  text-align: center;
+  cursor: pointer;
 }
 .acts {
   display: flex;

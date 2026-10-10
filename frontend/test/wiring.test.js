@@ -236,6 +236,22 @@ test('Timeline 内联编辑时置共享态，并在卸载时复位', () => {
   assert.match(tl, /onUnmounted\(\(\) => store\.setEditingRecord\(false\)\)/)
 })
 
+// 时间轴编辑面板的图片：后端上传接口一直支持带 event_id，缺的只是编辑面板里的入口
+// （曾经编辑一条记录加不了图）。这几条守住：入口在、挂对归属、日期不串、能删。
+test('Timeline 编辑面板可增删图片（挂 event_id、用事件日期、按媒体模块门控）', () => {
+  const tl = src('src/views/Timeline.vue')
+  assert.match(tl, /van-uploader v-model="fileList"/, '编辑面板要有图片选择器')
+  assert.match(tl, /api\.uploadMedia\(raw, \{/, '要走既有上传接口')
+  assert.match(tl, /event_id: f\.id/, '必须挂到这条记录上（否则时间轴不会显示）')
+  // 拍摄日期用事件日期：用「今天」会把老照片排到相册最前面
+  assert.match(tl, /captured_on: f\.event_date/)
+  assert.match(tl, /api\.deleteMedia\(m\.id\)/, '已有图片要能在面板里删')
+  assert.match(tl, /mediaVisible/, '按该人的「图片」模块门控')
+  assert.match(tl, /hasModule\(Number\(form\.value\?\.person_id\), 'media'\)/)
+  // 新图在「保存」时才上传（取消编辑不留半截数据）
+  assert.match(tl, /const uploaded = await uploadPickedFiles\(f\)/)
+})
+
 test('NewRecord 认领 ?person（FAB 带过来的当前范围）', () => {
   assert.match(src('src/views/NewRecord.vue'), /normalizePersonId\(route\.query\.person\)/)
 })
