@@ -6,7 +6,11 @@
 
 export function availableEventTypes(eventTypes, enabledModules) {
   const enabled = new Set(enabledModules || [])
-  return (eventTypes || []).filter((t) => !t.module || enabled.has(t.module))
+  // recordable === false：这类记录**不在通用记录页**提供手工新建（服装已迁到衣橱专有页），
+  // 但仍是合法的 type_key（时间轴筛选/标签/MCP 照旧用）。只过滤「能不能在记录页新建」。
+  return (eventTypes || []).filter(
+    (t) => t.recordable !== false && (!t.module || enabled.has(t.module))
+  )
 }
 
 // 切人后当前选中的类型可能已失效 → 回退到 fallback（默认 text），

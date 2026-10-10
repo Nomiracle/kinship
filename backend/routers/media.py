@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import datetime as dt
 import mimetypes
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -39,6 +40,36 @@ def _out(m: Media, names: dict) -> dict:
         "captured_on": m.captured_on,
         "created_at": m.created_at,
     }
+
+
+def _own(col, value):
+    """归属列比对：None 必须是 IS NULL —— 写成 `= NULL` 永远不成立（会漏判重复）。"""
+    return col.is_(None) if value is None else col == value
+
+
+def _find_same_upload(session: Session, rel: str, person_id: Optional[int],
+                      event_id: Optional[int],
+                      wardrobe_item_id: Optional[int]) -> Optional[Media]:
+    """这张图 + 这个归属是不是已经录过？用于上传幂等（重复上传不再插新行）。
+
+    文件名 = 「日期 + 内容哈希」，所以同内容重复上传落在同一个相对路径上；
+    HEIC 转码后 path 是 .jpg、原图记在 source_path 里 → 两边都要比。
+    只有磁盘文件还在时才复用：文件被手工删过时宁可新建一行，也不留破图引用。
+    """
+    cands = {rel}
+    if Path(rel).suffix.lower() in media_svc.SIPS_CONVERT:
+        cands.add(str(Path(rel).with_suffix(".jpg")))
+    row = session.scalar(
+        select(Media).where(
+            or_(Media.path.in_(cands), Media.source_path.in_(cands)),
+            _own(Media.person_id, person_id),
+            _own(Media.event_id, event_id),
+            _own(Media.wardrobe_item_id, wardrobe_item_id),
+        )
+    )
+    if row is None:
+        return None
+    return row if (settings.media_path / row.path).is_file() else None
 
 
 @router.get("/media", response_model=List[MediaOut])
@@ -90,6 +121,15 @@ async def upload_media(
             rel, ext, size = media_svc.save_upload(data, up.filename or "", )
         except media_svc.MediaError as exc:
             raise HTTPException(400, str(exc))
+
+        # ★ 同一张图重复上传（用户连点「上传」、网络重试、同一张全身照先挂事件又挂单品）：
+        #   文件名 = 日期 + 内容哈希 → 同内容 + 同归属必然落在同一个 path 上。
+        #   这时**复用已有那行**，不再插新行：否则相册里同一张图出现多次，
+        #   删除时还会互相牵连（多行共用同一个磁盘文件，见 delete_media 的注释）。
+        dup = _find_same_upload(session, rel, person_id, event_id, wardrobe_item_id)
+        if dup is not None:
+            created.append(dup)
+            continue
 
         kind = "video" if ext in media_svc.VIDEO_EXTS else "image"
         display_rel = rel

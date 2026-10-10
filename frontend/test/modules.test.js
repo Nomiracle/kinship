@@ -14,7 +14,8 @@ const TYPES = [
   { key: 'milestone' },
   { key: 'hobby' },
   { key: 'social' },
-  { key: 'outfit', module: 'outfit' },
+  // 服装：模块开着也**不在记录页**提供手工新建（别的 type_key 照旧；见 /api/config）
+  { key: 'outfit', module: 'outfit', recordable: false },
   { key: 'period', module: 'cycle' },
   { key: 'meeting', module: 'interaction' },
   { key: 'gift', module: 'gift' },
@@ -32,11 +33,17 @@ test('没绑 module 的类型在任何模块组合下都可用', () => {
 test('绑 module 的类型严格跟随开关（模块门控无回归）', () => {
   const keys = availableEventTypes(TYPES, ['cycle', 'outfit']).map((t) => t.key)
   assert.ok(keys.includes('period'))
-  assert.ok(keys.includes('outfit'))
   assert.ok(!keys.includes('meeting'))
   assert.ok(!keys.includes('gift'))
   assert.ok(!keys.includes('health'))
   assert.ok(!keys.includes('contact'))
+})
+
+test('recordable=false（服装）不在记录页出现 —— 模块开着也一样', () => {
+  const keys = availableEventTypes(TYPES, ['outfit', 'cycle']).map((t) => t.key)
+  assert.ok(!keys.includes('outfit'), '服装已迁到衣橱专有页，记录页不再提供手工新建')
+  // 只是「不在记录页新建」，type_key 本身仍在（时间轴筛选/标签照旧用）
+  assert.ok(TYPES.some((t) => t.key === 'outfit'))
 })
 
 test('切人后失效类型回退到 text，有效则保留', () => {

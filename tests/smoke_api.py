@@ -353,11 +353,13 @@ def main() -> int:
 
             # 同内容的两份：删一份不能把另一份的文件带走
             #（文件名 = 时间戳+内容哈希 → 同内容共用同一个文件；真出过事故）
+            # 注意：同一张图 + **同一归属** 现在会被去重成一行（上传幂等，见下一条），
+            # 所以这里故意用两个不同归属（只挂人 / 挂人+事件）来构造「两份共用一份文件」。
             st7, up_a = call("POST", "/api/media",
                              raw=multipart({"person_id": str(p["id"])},
                                            {"file": ("dupA.png", png, "image/png")}))
             st8, up_b = call("POST", "/api/media",
-                             raw=multipart({"person_id": str(p["id"])},
+                             raw=multipart({"person_id": str(p["id"]), "event_id": str(e_img["id"])},
                                            {"file": ("dupB.png", png, "image/png")}))
             if st7 == 201 and st8 == 201:
                 ia, pa = up_a[0]["id"], up_a[0]["path"]
@@ -371,6 +373,24 @@ def main() -> int:
                 st10, _ = call("GET", "/media/%s" % pb)
                 check("删掉重复那份后，另一份的行和文件都还在（不连带删文件）",
                       row_ok and st10 == 200, "行=%s 文件=%s" % (row_ok, st10))
+
+            # 上传幂等：同一张图重复传给**同一个归属**（同一事件 / 同一单品）→ 复用同一行。
+            # 不这么做的话，一次连点就会在相册里留下 N 张一模一样的图（真发生过）。
+            st_d1, up_d1 = call("POST", "/api/media",
+                                raw=multipart({"person_id": str(p["id"]),
+                                               "event_id": str(e_img["id"])},
+                                              {"file": ("same1.png", png, "image/png")}))
+            st_d2, up_d2 = call("POST", "/api/media",
+                                raw=multipart({"person_id": str(p["id"]),
+                                               "event_id": str(e_img["id"])},
+                                              {"file": ("same2.png", png, "image/png")}))
+            if st_d1 == 201 and st_d2 == 201:
+                created_media.append(up_d1[0]["id"])
+                _, ev_media = call("GET", "/api/media?event_id=%d" % e_img["id"])
+                same = [x for x in (ev_media or []) if x["path"] == up_d1[0]["path"]]
+                check("同归属重复上传只留一行（上传幂等，复用同一 media 行）",
+                      up_d1[0]["id"] == up_d2[0]["id"] and len(same) == 1,
+                      "ids=%s/%s 同 path 行数=%d" % (up_d1[0]["id"], up_d2[0]["id"], len(same)))
 
         # --- 人物编辑（名称 / 别名 / 备注）---
         st, edited = call("PATCH", "/api/persons/%d" % p["id"], {
@@ -416,6 +436,10 @@ def main() -> int:
         check("类型引用的模块都存在于 modules 配置（否则前端会永远隐藏）",
               all(v in module_keys for v in ets.values() if v),
               "modules=%s" % sorted(module_keys))
+        rec = {t["key"]: t.get("recordable", True) for t in (cfg or {}).get("event_types", [])}
+        check("服装声明 recordable=false（不在通用记录页手工新建；仍是合法 type_key）",
+              rec.get("outfit") is False and rec.get("text") is True and rec.get("period") is True,
+              str(rec)[:200])
 
         st, rel = call("POST", "/api/relations", {
             "from_person_id": p["id"], "to_person_id": her_friend["id"],
@@ -461,6 +485,19 @@ def main() -> int:
         check("单品数 = 2（同名单品只有一条）", len(by_name) == 2, str(by_name))
         check("穿着次数正确聚合（黑裤 1 / 白毛衣 2）",
               by_name.get(PREFIX + "黑裤") == 1 and by_name.get(PREFIX + "白毛衣") == 2, str(by_name))
+
+        # 多单品照片：图挂在「事件」上 → 一件全身照只存一份，单品的穿着历史里带出来
+        st_ph, ph = call("POST", "/api/media",
+                         raw=multipart({"person_id": str(p["id"]), "event_id": str(of1["id"])},
+                                       {"file": ("outfit.png", png_bytes(900, 1200, (30, 40, 50)),
+                                                 "image/png")}))
+        st_one, one = call("GET", "/api/wardrobe/items/%d" % it1["id"])
+        if st_ph == 201:
+            created_media.append(ph[0]["id"])
+        w_rows = [w for w in ((one or {}).get("wears") or []) if w.get("event_id") == of1["id"]]
+        check("单品的穿着历史带出那次穿搭的照片（图挂事件、多单品共享一份）",
+              st_ph == 201 and bool(w_rows) and len(w_rows[0].get("media") or []) == 1,
+              "上传=%s wears=%s" % (st_ph, str(w_rows)[:160]))
 
         st, tl3 = call("GET", "/api/events?person_id=%d&type_key=outfit" % p["id"])
         hit = [x for x in (tl3 or {}).get("items", []) if x["id"] == of1.get("id")]

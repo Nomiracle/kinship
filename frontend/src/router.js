@@ -9,6 +9,7 @@ const views = {
   new: () => import('./views/NewRecord.vue'),
   timeline: () => import('./views/Timeline.vue'),
   wardrobe: () => import('./views/Wardrobe.vue'),
+  wardrobeNew: () => import('./views/WardrobeNew.vue'),
   relations: () => import('./views/Relations.vue'),
   gallery: () => import('./views/Gallery.vue'),
   people: () => import('./views/PeopleView.vue'),
@@ -32,6 +33,9 @@ const routes = [
   { path: '/new', name: 'new', component: views.new, meta: { title: '记录', back: true, backTo: '/', hideTabbar: true } },
   { path: '/timeline', name: 'timeline', component: views.timeline, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
   { path: '/wardrobe', name: 'wardrobe', component: views.wardrobe, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  // 服装的专有记录页：不在通用「记录页」里记（那里只记事件，不管单品目录）。
+  // 不加 group → 不渲染二级分段条（录入页只要返回按钮）。
+  { path: '/wardrobe/new', name: 'wardrobe-new', component: views.wardrobeNew, meta: { title: '记穿搭', tab: 'timeline', back: true, backTo: '/wardrobe', hideTabbar: true, scoped: true } },
   { path: '/gallery', name: 'gallery', component: views.gallery, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
   { path: '/people', name: 'people', component: views.people, meta: { title: '人物', tab: 'people', group: 'people' } },
   { path: '/relations', name: 'relations', component: views.relations, meta: { title: '人物', tab: 'people', group: 'people' } },

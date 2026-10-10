@@ -480,6 +480,8 @@ def wardrobe_item(item_id: int) -> str:
             line += " 和 " + "、".join(w["together"])
         if w.get("note"):
             line += " —— %s" % w["note"]
+        if w.get("media"):
+            line += "（照片 %d 张）" % len(w["media"])
         lines.append(line)
     return "\n".join(lines)
 

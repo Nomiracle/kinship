@@ -251,3 +251,49 @@ test('下游页（时间轴/相册/衣橱）读取 ?person 且不写回全局 sc
     assert.ok(!s.includes('setCurrentPerson'), `${f} 不应写回全局 scope`)
   }
 })
+
+// ---------------------------------------------------------------- 服装：专有记录页（衣橱）
+// 决策：服装不再混在通用「记录页」里 —— 它要查单品目录 + 写引用，语义跟「记一件事」不同，
+// 而且今天就是这么漏掉单品的。但入口不能少：衣橱按钮 + 单品「再穿一次」+ 记录页的
+// 「记穿搭」卡片，三条都指向 /wardrobe/new。
+test('服装有专有记录页 /wardrobe/new（录入页隐藏 tabbar、返回落到衣橱）', () => {
+  assert.ok(router.includes("path: '/wardrobe/new'"), '缺 /wardrobe/new 路由')
+  assert.match(router, /path: '\/wardrobe\/new'[\s\S]*hideTabbar: true/)
+  assert.match(router, /path: '\/wardrobe\/new'[\s\S]*backTo: '\/wardrobe'/)
+})
+
+test('记录页不再管服装：只留「记穿搭」入口，勾单品逻辑搬进共享组件', () => {
+  const nr = src('src/views/NewRecord.vue')
+  assert.ok(!nr.includes('wardrobeCategories'), '记录页不该再有单品勾选 UI')
+  assert.ok(!nr.includes('createOutfit'), '记录页不该再直接建穿搭')
+  assert.match(nr, /const outfitEnabled = computed/)
+  assert.match(nr, /router\.push\(\{ path: '\/wardrobe\/new'/)
+})
+
+test('穿搭面板抽成 components/OutfitForm.vue：跨类别已选汇总 + 0 单品确认 + 预选', () => {
+  const f = src('src/components/OutfitForm.vue')
+  assert.match(f, /api\.createOutfit/)
+  assert.match(f, /已选 \{\{ pickedAll \}\} 件/, '分组勾选必须有跨类别汇总行')
+  assert.match(f, /这次没有勾单品/, '0 单品要二次确认（衣橱按单品聚合，不勾就白记）')
+  assert.match(f, /preselect/)
+})
+
+test('衣橱有两个记录入口（记一次穿着 / 单品再穿一次），都带上当前范围的人', () => {
+  const w = src('src/views/Wardrobe.vue')
+  assert.match(w, /＋ 记一次穿着（今天）/)
+  assert.match(w, /＋ 再穿一次（今天）/)
+  assert.match(w, /function goRecord\(itemId\)/)
+  assert.match(w, /scopeQuery\(effectivePersonId\.value\)/)
+})
+
+test('单品穿着历史带出那次穿搭的照片（不复制给每件单品）', () => {
+  assert.match(src('src/views/Wardrobe.vue'), /w\.media/)
+})
+
+test('专有记录页遵守下游页约定：读 ?person、不写回全局 scope', () => {
+  const nw = src('src/views/WardrobeNew.vue')
+  assert.match(nw, /normalizePersonId\(route\.query\.person\)/)
+  assert.ok(!nw.includes('setCurrentPerson'), '不应写回全局 scope')
+  assert.match(nw, /OutfitForm/)
+  assert.match(nw, /hasModule\(personId\.value, 'outfit'\)/, '没开服装模块的人不给记')
+})

@@ -39,6 +39,17 @@
       </p>
     </div>
 
+    <!-- 服装有专有流程（衣橱）：这里只留入口，不再把「勾单品」混进通用记事 -->
+    <div class="card" v-if="outfitEnabled">
+      <h3>记穿搭（服装）</h3>
+      <p class="muted" style="margin: 0 0 8px">
+        服装已独立成「衣橱」的专有流程：勾单品、累加穿次数、照片挂这次穿搭。
+      </p>
+      <van-button block size="small" type="primary" @click="goOutfit">
+        ＋ 记一次穿着（今天）
+      </van-button>
+    </div>
+
     <div class="card">
       <h3>哪一天</h3>
       <div class="chips" style="margin-bottom: 8px">
@@ -62,7 +73,7 @@
 
     <div class="card">
       <h3>内容</h3>
-      <van-field v-if="type !== 'outfit'" v-model="title" :label="titleLabel" :placeholder="titlePlaceholder" />
+      <van-field v-model="title" :label="titleLabel" :placeholder="titlePlaceholder" />
 
       <van-field
         v-if="type === 'text' || type === 'health' || type === 'mood'"
@@ -73,53 +84,6 @@
         label="详细"
         placeholder="她说过的、穿过的、发生的事…"
       />
-
-      <!-- 服装：勾单品（而不是手写标题）—— 同一件反复穿只会累加次数，不再重复记 -->
-      <template v-if="type === 'outfit'">
-        <div class="chips" style="margin-bottom: 6px">
-          <van-tag
-            v-for="c in store.wardrobeCategories"
-            :key="c.key"
-            :type="pickCategory === c.key ? 'primary' : 'default'"
-            @click="pickCategory = c.key"
-          >
-            {{ c.label }}
-          </van-tag>
-        </div>
-        <div class="chips" style="margin-bottom: 8px">
-          <van-tag
-            v-for="it in itemsOfCategory"
-            :key="it.id"
-            :type="isPicked(it) ? 'primary' : 'default'"
-            size="large"
-            @click="togglePick(it)"
-          >
-            {{ it.name }}<span class="muted"> · 穿{{ it.wear_count }}</span>
-          </van-tag>
-          <span v-if="!itemsOfCategory.length" class="muted">
-            这个类别还没有单品 —— 在下面直接新建
-          </span>
-        </div>
-        <van-field v-model="newName" label="新单品" :placeholder="'名称，如：' + pickCategoryLabel + '一件'" />
-        <van-field v-model="newColor" label="颜色" placeholder="可空" />
-        <van-button size="small" plain style="margin-top: 6px" @click="addNew">＋ 加进来</van-button>
-        <div class="chips" style="margin: 10px 0">
-          <van-tag
-            v-for="(n, i) in newItems"
-            :key="i"
-            closable
-            size="large"
-            @click="newItems.splice(i, 1)"
-          >
-            {{ n.name }}<span v-if="n.color">（{{ n.color }}）</span>
-          </van-tag>
-        </div>
-        <van-field v-model="location" label="地点" placeholder="如：家里（可空）" />
-        <van-field v-model="note" label="备注" placeholder="这次穿搭的备注（可空）" />
-        <p class="muted" style="margin: 6px 0 0">
-          本次选了 {{ pickedAll }} 件 —— 保存后只生成 1 条穿搭记录；同名单品会复用已有的，不会重复建。
-        </p>
-      </template>
 
       <template v-if="type === 'period'">
         <p class="muted">
@@ -176,15 +140,16 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { availableEventTypes, reconcileEventType } from '../lib/modules'
-import { normalizePersonId } from '../lib/scope'
+import { normalizePersonId, scopeQuery } from '../lib/scope'
 
 const store = useArchiveStore()
 const route = useRoute()
+const router = useRouter()
 const WEEK = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
 const type = ref('text')
@@ -198,6 +163,11 @@ const personLabel = computed(() => (personObj.value ? store.displayName(personOb
 // 绑了 module 的类型要求该模块已启用；没绑 module 的（文字/情绪/里程碑/爱好/社交）任何时候都能记
 const availableTypes = computed(() => availableEventTypes(store.eventTypes, modules.value))
 const mediaEnabled = computed(() => modules.value.includes('media'))
+// 服装不在这里记（已迁到衣橱专有页），只留一个入口卡片
+const outfitEnabled = computed(() => modules.value.includes('outfit'))
+function goOutfit() {
+  router.push({ path: '/wardrobe/new', query: scopeQuery(personId.value) })
+}
 
 async function loadModules() {
   if (!personId.value) return
@@ -217,7 +187,7 @@ watch(personId, async () => {
     skipNextPick = false
     return
   }
-  await Promise.all([loadModules(), loadWardrobe()])
+  await loadModules()
 })
 // 同时在场的人（三人场合）：事件会同时挂到这些人名下
 const extraIds = ref([])
@@ -244,48 +214,8 @@ const saving = ref(false)
 const recent = ref([])
 const fileList = ref([])
 
-// ---- 服装：勾单品 ----
-const wardrobeItems = ref([])
-const pickCategory = ref('top')
-const picked = ref([])      // [{ item_id }] —— 复用已有单品
-const newItems = ref([])    // [{ category, name, color }] —— 没有就新建
-const note = ref('')
-const newName = ref('')
-const newColor = ref('')
-
-const pickCategoryLabel = computed(() => store.wardrobeCategoryLabel(pickCategory.value))
-const itemsOfCategory = computed(() =>
-  wardrobeItems.value.filter((i) => i.category === pickCategory.value && !i.merged_into_id)
-)
-const pickedAll = computed(() => picked.value.length + newItems.value.length)
-
-function isPicked(it) {
-  return picked.value.some((p) => p.item_id === it.id)
-}
-function togglePick(it) {
-  const i = picked.value.findIndex((p) => p.item_id === it.id)
-  if (i >= 0) picked.value.splice(i, 1)
-  else picked.value.push({ item_id: it.id, category: it.category })
-}
-function addNew() {
-  const name = newName.value.trim()
-  if (!name) {
-    showToast('先填名称')
-    return
-  }
-  newItems.value.push({ category: pickCategory.value, name, color: newColor.value || null })
-  newName.value = ''
-  newColor.value = ''
-}
-async function loadWardrobe() {
-  if (!personId.value) return
-  try {
-    const res = await api.wardrobeItems({ person_id: Number(personId.value) })
-    wardrobeItems.value = res.items || []
-  } catch {
-    wardrobeItems.value = []
-  }
-}
+// 服装的勾单品逻辑不在这里了：抽成 components/OutfitForm.vue，
+// 由衣橱专有页（/wardrobe/new）与时间轴的编辑面板共用（见 NewRecord 顶部「记穿搭」入口）。
 
 const todayStr = new Date().toLocaleDateString('sv-SE') // YYYY-MM-DD（本地时区）
 function shift(days) {
@@ -310,14 +240,12 @@ const dateHuman = computed(() => {
 })
 
 const titleLabel = computed(
-  () =>
-    ({ text: '标题', outfit: '单品/搭配', period: '备注', meeting: '做了什么' }[type.value] || '标题')
+  () => ({ text: '标题', period: '备注', meeting: '做了什么' }[type.value] || '标题')
 )
 const titlePlaceholder = computed(
   () =>
     ({
       text: '一句话概括',
-      outfit: '如：棕色马甲 + 黑色裙子',
       period: '可留空',
       meeting: '如：一起吃饭、双人开黑',
     }[type.value] || '')
@@ -354,12 +282,9 @@ function resetContent() {
   title.value = ''
   body.value = ''
   tags.value = ''
-  note.value = ''
   location.value = ''
   hours.value = ''
   overnight.value = false
-  picked.value = []
-  newItems.value = []
 }
 
 async function submit() {
@@ -387,30 +312,6 @@ async function submit() {
   }
   saving.value = true
   try {
-    // ---- 服装：一次穿搭 = 1 条记录 + 引用单品（同名的复用，不重复建） ----
-    if (type.value === 'outfit') {
-      const items = [
-        ...picked.value.map((p) => ({ item_id: p.item_id })),
-        ...newItems.value.map((n) => ({ category: n.category, name: n.name, color: n.color })),
-      ]
-      const created = await api.createOutfit({
-        person_id: Number(personId.value),
-        event_date: eventDate.value,
-        items,
-        note: note.value || null,
-        location: location.value || null,
-        person_ids: extraIds.value.length
-          ? [...new Set([Number(personId.value), ...extraIds.value])]
-          : null,
-      })
-      const ok = await uploadPickedFiles(created.id)
-      resetContent()
-      await loadRecent()
-      await loadWardrobe()
-      showToast(ok === null ? '已记录穿搭' : ok ? `已记录穿搭，含 ${ok} 张图片` : '已记录（图片未上传成功）')
-      return
-    }
-
     const payload = {
       person_id: Number(personId.value),
       type_key: type.value,
@@ -461,7 +362,7 @@ onMounted(async () => {
     store.currentPersonId ||
     store.others[0]?.id ||
     store.persons[0]?.id
-  await Promise.all([loadModules(), loadWardrobe(), loadRecent()])
+  await Promise.all([loadModules(), loadRecent()])
   skipNextPick = false // 万一 personId 没变化（watcher 没触发），别把标志留在 true
 })
 
@@ -475,7 +376,7 @@ watch(
         store.currentPersonId ||
         store.others[0]?.id ||
         store.persons[0]?.id
-      await Promise.all([loadModules(), loadWardrobe()])
+      await loadModules()
     }
   }
 )

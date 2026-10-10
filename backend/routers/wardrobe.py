@@ -70,7 +70,7 @@ def _item_out(item: WardrobeItem, names: dict, count: int = 0,
 
 
 def _wear_rows(session: Session, item_id: int) -> List[dict]:
-    """单品的穿着历史（含「当时还穿了什么」）。"""
+    """单品的穿着历史（含「当时还穿了什么」+ 那次穿搭的照片）。"""
     wears = list(session.scalars(
         select(OutfitWear).where(OutfitWear.item_id == item_id)
     ))
@@ -86,6 +86,14 @@ def _wear_rows(session: Session, item_id: int) -> List[dict]:
     ).all():
         if row[2] != item_id:
             together.setdefault(row[0], []).append(row[1])
+    # 照片挂在「事件」上（一张全身照只存一份，多单品共享），单品视图里带出来即可
+    photos: Dict[int, List[dict]] = {}
+    for m in session.scalars(
+        select(Media).where(Media.event_id.in_(event_ids)).order_by(Media.id)
+    ):
+        photos.setdefault(m.event_id, []).append({
+            "id": m.id, "kind": m.kind, "path": m.path, "thumb_path": m.thumb_path,
+        })
     out = []
     for w in wears:
         e = events.get(w.event_id)
@@ -95,6 +103,7 @@ def _wear_rows(session: Session, item_id: int) -> List[dict]:
             "slot": w.slot,
             "note": w.note,
             "together": together.get(w.event_id, []),
+            "media": photos.get(w.event_id, []),
         })
     out.sort(key=lambda x: (x["event_date"] is None, x["event_date"] or dt.date.min), reverse=True)
     return out

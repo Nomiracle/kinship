@@ -60,7 +60,11 @@ def get_config():
         "event_types": [
             {"key": "text", "label": "文字", "icon": "edit"},
             # module = 对应的功能模块开关；没写 module 的类型任何时候都能记
-            {"key": "outfit", "label": "服装", "icon": "dress", "module": "outfit"},
+            # recordable=false = 不在通用「记录页」提供手工新建（服装已迁到衣橱专有页
+            #   /wardrobe/new，那儿才管单品目录）；它仍是合法 type_key，时间轴筛选/标签/
+            #   MCP 照旧用，所以绝不能从这张表里删掉。
+            {"key": "outfit", "label": "服装", "icon": "dress", "module": "outfit",
+             "recordable": False},
             {"key": "period", "label": "生理期", "icon": "calendar", "module": "cycle"},
             {"key": "meeting", "label": "相处", "icon": "friends", "module": "interaction"},
             {"key": "gift", "label": "礼物", "icon": "gift", "module": "gift"},

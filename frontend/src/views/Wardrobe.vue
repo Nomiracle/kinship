@@ -24,6 +24,10 @@
           {{ c.label }}
         </van-tag>
       </div>
+      <!-- 服装的记录入口只在这里（专有流程）：勾单品 → 1 条穿搭 → 累加穿次数 -->
+      <van-button block size="small" type="primary" style="margin-top: 10px" @click="goRecord()">
+        ＋ 记一次穿着（今天）
+      </van-button>
       <p class="muted" style="margin: 8px 0 0">
         一件衣服只存一条；反复穿会累加「穿过 N 次」，不再重复记事件。
       </p>
@@ -73,7 +77,7 @@
       </div>
     </div>
 
-    <van-empty v-if="!items.length" description="还没有单品：去「记录」页记一次穿搭，或在这里新建" />
+    <van-empty v-if="!items.length" description="还没有单品：点上面的「＋ 记一次穿着」，或在这里新建" />
 
     <!-- 新建单品 -->
     <div class="card">
@@ -124,6 +128,9 @@
           </template>
         </van-field>
         <div class="chips" style="margin-top: 8px">
+          <van-button size="small" type="primary" plain @click="goRecord(detail.id)">
+            ＋ 再穿一次（今天）
+          </van-button>
           <van-button size="small" type="primary" @click="save">保存</van-button>
           <van-button size="small" @click="pickMerge = true">合并到…</van-button>
           <van-button size="small" @click="toggleActive">
@@ -155,6 +162,13 @@
             </span>
           </div>
           <div v-if="w.note" class="muted">备注：{{ w.note }}</div>
+          <!-- 那次穿搭的照片：图挂在「事件」上（一张全身照只存一份），单品视图里带出来即可 -->
+          <div v-if="(w.media || []).length" class="thumbs" style="margin-top: 6px">
+            <template v-for="m in w.media" :key="m.id">
+              <img v-if="m.kind === 'image'" :src="api.mediaUrl(m)" />
+              <a v-else class="video-ph" :href="api.mediaUrl(m, false)" target="_blank">▶</a>
+            </template>
+          </div>
         </div>
         <van-empty v-if="!detail.wears.length" description="还没穿过（或只是「提起过」）" />
       </div>
@@ -177,14 +191,15 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
-import { resolveScopedPerson } from '../lib/scope'
+import { resolveScopedPerson, scopeQuery } from '../lib/scope'
 
 const store = useArchiveStore()
 const route = useRoute()
+const router = useRouter()
 // 衣橱实际显示谁：优先 URL ?person（从个人页点进来），否则跟随全局；不写回全局。
 const effectivePersonId = computed(() =>
   resolveScopedPerson(route.query.person, store.currentPersonId)
@@ -243,6 +258,14 @@ const mergeCandidates = computed(() => {
   if (!detail.value) return []
   return items.value.filter((i) => i.category === detail.value.category && i.id !== detail.value.id && !i.merged_into_id)
 })
+
+// 记一次穿着（专有页 /wardrobe/new）：从单品详情点进来时预选这件。
+// 服装没有「改这条记录」的入口 —— 用来记总是新增一条穿搭，改历史记录去时间轴。
+function goRecord(itemId) {
+  const q = { ...scopeQuery(effectivePersonId.value) }
+  if (itemId) q.item = itemId
+  router.push({ path: '/wardrobe/new', query: q })
+}
 
 async function load() {
   const personId = effectivePersonId.value || undefined
@@ -425,6 +448,18 @@ onMounted(async () => {
   height: 72px;
   object-fit: cover;
   border-radius: 6px;
+}
+.video-ph {
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+  background: #f2f3f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #969799;
+  font-size: 22px;
+  text-decoration: none;
 }
 .picker {
   width: 100%;
