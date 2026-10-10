@@ -306,6 +306,37 @@ test('单品穿着历史带出那次穿搭的照片（不复制给每件单品�
   assert.match(src('src/views/Wardrobe.vue'), /w\.media/)
 })
 
+// 图片放大：三处（时间轴记录 / 衣橱单品详情 / 个人页服装图片）曾经是
+// window.open(原图, '_blank')，手机上会把 SPA 丢到后台；衣橱单品详情甚至连点击都没接
+// （照片点上去毫无反应）。现在统一页面内 van-image-preview。
+test('点图放大走页面内预览：时间轴记录不再新开标签页', () => {
+  const tl = src('src/views/Timeline.vue')
+  assert.match(tl, /from '\.\.\/lib\/media-preview'/)
+  assert.match(tl, /@click="openFull\(m, e\.media\)"/, '列表缩略图要带上这条记录的图片集合')
+  assert.match(tl, /van-image-preview[\s\S]*:images="preview\.images"[\s\S]*:start-position="preview\.index"/)
+  assert.match(tl, /@click="openFull\(m, form\.media\)"/, '编辑面板里的图同样要点得开')
+  // window.open 只允许留给视频（没有页面内预览的东西）
+  const opens = tl.match(/window\.open\(/g) || []
+  assert.equal(opens.length, 1, '只应剩视频那一条 window.open')
+  assert.match(tl, /if \(m && m\.kind === 'video'\) \{\s*window\.open/)
+})
+
+test('衣橱单品详情的照片/穿着照片可放大（此前点了没反应）', () => {
+  const w = src('src/views/Wardrobe.vue')
+  assert.match(w, /const detailPhotos = computed/, '预览集合 = 单品照片 + 各次穿着的照片')
+  assert.match(w, /\(detail\.value\?\.wears \|\| \[\]\)\.flatMap\(\(w\) => w\.media \|\| \[\]\)/)
+  assert.match(w, /v-if="m\.kind !== 'video'" :src="api\.mediaUrl\(m\)" @click="openFull\(m, detailPhotos\)"/)
+  assert.match(w, /:src="api\.mediaUrl\(m\)" @click="openFull\(m, detailPhotos\)"/, '穿着历史里的图也要能放大')
+  assert.match(w, /van-image-preview[\s\S]*:start-position="preview\.index"/)
+  assert.ok(!/window\.open/.test(w), '衣橱不该再开新标签页（视频用 <a target=_blank>）')
+})
+
+test('个人页「服装 / 图片」同样页面内放大', () => {
+  const p = src('src/views/PersonView.vue')
+  assert.match(p, /@click="openFull\(m, photos\)"/)
+  assert.match(p, /van-image-preview[\s\S]*:images="preview\.images"/)
+})
+
 test('专有记录页遵守下游页约定：读 ?person、不写回全局 scope', () => {
   const nw = src('src/views/WardrobeNew.vue')
   assert.match(nw, /normalizePersonId\(route\.query\.person\)/)

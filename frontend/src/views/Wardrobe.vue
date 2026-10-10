@@ -144,7 +144,11 @@
 
         <h4>照片</h4>
         <div class="thumbs">
-          <img v-for="m in detail.media" :key="m.id" :src="api.mediaUrl(m)" />
+          <template v-for="m in detail.media" :key="m.id">
+            <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" @click="openFull(m, detailPhotos)" />
+            <!-- 视频没有页面内预览：给个带 ▶ 的方块，点开看原片（新标签页） -->
+            <a v-else class="video-ph" :href="api.mediaUrl(m, false)" target="_blank">▶</a>
+          </template>
         </div>
         <van-uploader :after-read="upload" :max-count="1" style="margin-top: 6px">
           <van-button size="small" plain>＋ 上传照片</van-button>
@@ -165,7 +169,7 @@
           <!-- 那次穿搭的照片：图挂在「事件」上（一张全身照只存一份），单品视图里带出来即可 -->
           <div v-if="(w.media || []).length" class="thumbs" style="margin-top: 6px">
             <template v-for="m in w.media" :key="m.id">
-              <img v-if="m.kind === 'image'" :src="api.mediaUrl(m)" />
+              <img v-if="m.kind === 'image'" :src="api.mediaUrl(m)" @click="openFull(m, detailPhotos)" />
               <a v-else class="video-ph" :href="api.mediaUrl(m, false)" target="_blank">▶</a>
             </template>
           </div>
@@ -173,6 +177,14 @@
         <van-empty v-if="!detail.wears.length" description="还没穿过（或只是「提起过」）" />
       </div>
     </van-popup>
+
+    <!-- 图片放大：页面内预览（支持双指缩放 / 左右滑动）。集合 = 单品照片 + 各次穿着的照片，
+         点哪张就从哪张开始 —— 单品照片和穿着照片在同一层里连续翻看，不用回退再点。 -->
+    <van-image-preview
+      v-model:show="preview.show"
+      :images="preview.images"
+      :start-position="preview.index"
+    />
 
     <!-- 合并目标选择 -->
     <van-popup v-model:show="pickMerge" position="bottom" round :style="{ height: '60%' }">
@@ -196,6 +208,7 @@ import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { resolveScopedPerson, scopeQuery } from '../lib/scope'
+import { previewUrls } from '../lib/media-preview'
 
 const store = useArchiveStore()
 const route = useRoute()
@@ -254,6 +267,25 @@ const groups = computed(() =>
     .map((c) => ({ ...c, items: items.value.filter((i) => i.category === c.key && (!category.value || category.value === c.key)) }))
     .filter((g) => g.items.length)
 )
+
+// 详情页里所有能放大的图：单品自己的照片 + 各次穿着的照片（图挂在事件上，
+// 这里只是带出来 —— 预览想把它们串成一条，省得「看全身照要点两次」）。
+const detailPhotos = computed(() => [
+  ...(detail.value?.media || []),
+  ...(detail.value?.wears || []).flatMap((w) => w.media || []),
+])
+
+// 点图放大：页面内预览，不再开新标签页 —— 手机上开新标签页会把 SPA 丢到后台，
+// 看完还得手动切回来。视频没得预览，仍走原片新标签页（模板里的 <a>）。
+const preview = reactive({ show: false, images: [], index: 0 })
+
+function openFull(m, list) {
+  const p = previewUrls(list && list.length ? list : [m], m, api.mediaUrl)
+  preview.images = p.images
+  preview.index = p.index
+  preview.show = true
+}
+
 const mergeCandidates = computed(() => {
   if (!detail.value) return []
   return items.value.filter((i) => i.category === detail.value.category && i.id !== detail.value.id && !i.merged_into_id)

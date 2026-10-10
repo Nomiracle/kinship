@@ -45,10 +45,10 @@
             v-if="m.kind !== 'video'"
             :src="api.mediaUrl(m)"
             loading="lazy"
-            @click="openFull(m)"
+            @click="openFull(m, e.media)"
           />
-          <!-- 视频不能塞进 <img>（会变破图）：给个带 ▶ 的方块，点开看原片 -->
-          <div v-else class="vthumb" @click="openFull(m)">▶</div>
+          <!-- 视频不能塞进 <img>（会变破图），也没有页面内预览：给个带 ▶ 的方块，点开看原片 -->
+          <div v-else class="vthumb" @click="openFull(m, e.media)">▶</div>
         </template>
       </div>
       <div v-if="e.tags" class="chips" style="margin-top: 6px">
@@ -169,9 +169,9 @@
           </div>
           <div v-if="form.media.length" class="thumbs">
             <div v-for="m in form.media" :key="m.id" class="thumb-box">
-              <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" @click="openFull(m)" />
-              <!-- 视频不能塞进 <img>（会变破图）：给个带 ▶ 的方块，点开看原片 -->
-              <div v-else class="vthumb" @click="openFull(m)">▶</div>
+              <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" @click="openFull(m, form.media)" />
+              <!-- 视频不能塞进 <img>（会变破图），也没有页面内预览：点开看原片 -->
+              <div v-else class="vthumb" @click="openFull(m, form.media)">▶</div>
               <span class="thumb-del" title="删掉这张" @click="removePhoto(m)">×</span>
             </div>
           </div>
@@ -187,6 +187,13 @@
         </van-button>
       </div>
     </van-popup>
+
+    <!-- 图片放大：页面内预览（支持双指缩放 / 左右滑动），不再新开标签页 -->
+    <van-image-preview
+      v-model:show="preview.show"
+      :images="preview.images"
+      :start-position="preview.index"
+    />
   </div>
 </template>
 
@@ -197,6 +204,7 @@ import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { resolveScopedPerson } from '../lib/scope'
+import { previewUrls } from '../lib/media-preview'
 
 const store = useArchiveStore()
 const route = useRoute()
@@ -452,8 +460,19 @@ async function remove(e) {
   await load()
 }
 
-function openFull(m) {
-  window.open(api.mediaUrl(m, false), '_blank')
+// 点缩略图放大：图片走页面内预览（原来是 window.open 新标签页 —— 手机上会把 SPA
+// 丢到后台、看完还得手动切回来）；视频没得预览，仍开原片。
+const preview = reactive({ show: false, images: [], index: 0 })
+
+function openFull(m, list) {
+  if (m && m.kind === 'video') {
+    window.open(api.mediaUrl(m, false), '_blank')
+    return
+  }
+  const p = previewUrls(list && list.length ? list : [m], m, api.mediaUrl)
+  preview.images = p.images
+  preview.index = p.index
+  preview.show = true
 }
 
 watch([type, from, to, effectivePersonId], load)

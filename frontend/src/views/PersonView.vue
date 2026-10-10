@@ -204,8 +204,8 @@
       <h3>服装 / 图片（最近 {{ photos.length }} 张）</h3>
       <div class="thumbs">
         <template v-for="m in photos" :key="m.id">
-          <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" loading="lazy" @click="openFull(m)" />
-          <div v-else class="vthumb" @click="openFull(m)">▶</div>
+          <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" loading="lazy" @click="openFull(m, photos)" />
+          <div v-else class="vthumb" @click="openFull(m, photos)">▶</div>
         </template>
       </div>
       <router-link :to="{ path: '/gallery', query: scopeQuery(person.id) }">去相册 →</router-link>
@@ -274,6 +274,13 @@
   </div>
 
   <van-empty v-else description="加载中…" />
+
+  <!-- 图片放大：页面内预览（支持双指缩放），不再新开标签页 -->
+  <van-image-preview
+    v-model:show="preview.show"
+    :images="preview.images"
+    :start-position="preview.index"
+  />
 </template>
 
 <script setup>
@@ -284,6 +291,7 @@ import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { scopeQuery } from '../lib/scope'
 import { birthdayLine } from '../lib/birthday'
+import { previewUrls } from '../lib/media-preview'
 
 const store = useArchiveStore()
 const route = useRoute()
@@ -294,6 +302,8 @@ const attrs = ref([])
 const events = ref([])
 const pred = ref(null)
 const photos = ref([])
+// 「点图放大」的页面内预览态（不再 window.open 新标签页）
+const preview = reactive({ show: false, images: [], index: 0 })
 const newAttrValue = ref('')
 const pickedCategory = ref('like')
 const editing = ref(false)
@@ -351,8 +361,15 @@ async function load() {
   pred.value = cycleUsable.value ? predData : null
 }
 
-function openFull(m) {
-  window.open(api.mediaUrl(m, false), '_blank')
+function openFull(m, list) {
+  if (m && m.kind === 'video') {
+    window.open(api.mediaUrl(m, false), '_blank')
+    return
+  }
+  const p = previewUrls(list && list.length ? list : [m], m, api.mediaUrl)
+  preview.images = p.images
+  preview.index = p.index
+  preview.show = true
 }
 
 // 关系摘要里的「管理」：直接展开管理面板
