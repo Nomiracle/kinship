@@ -402,12 +402,14 @@ def create_outfit(payload: OutfitIn, session: Session = Depends(get_session)):
         note = ("地点：%s" % payload.location) + ("；" + note if note else "")
     body = wardrobe_svc.render_body(pairs, note=note)
 
+    # 单品是真源：没手改就按单品渲染标题/正文；手改了以手改文本为准
+    # （与 PATCH /api/events 的「手改优先」同一口径 —— 记录页的「手改标题/正文」走这里）
     event = Event(
         person_id=payload.person_id,
         type_key="outfit",
         event_date=payload.event_date,
-        title=wardrobe_svc.render_title(pairs),
-        body=body,
+        title=payload.title or wardrobe_svc.render_title(pairs),
+        body=payload.body or body,
         tags=payload.tags,
         sensitivity=payload.sensitivity,
         source=payload.source,

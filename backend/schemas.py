@@ -402,6 +402,10 @@ class OutfitIn(BaseModel):
     location: Optional[str] = None
     note: Optional[str] = None
     tags: Optional[str] = None
+    # 手改的标题/正文（记录页的「手改标题/正文」开关）：
+    # 给了就用给的，没给就按单品渲染 —— 与 PATCH 的「单品是真源，手改优先」同一口径
+    title: Optional[str] = None
+    body: Optional[str] = None
     sensitivity: str = "normal"
     source: str = "web"
     person_ids: Optional[List[int]] = None

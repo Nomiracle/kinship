@@ -124,6 +124,9 @@ def list_events(
     date_from: Optional[dt.date] = None,
     date_to: Optional[dt.date] = None,
     q: Optional[str] = None,
+    # date（默认）= 按事件日期倒序（时间轴的「记录」语义）；created = 按写入时间倒序
+    #   （记录页「刚记的」用：记到过去某天的记录也得出现在「刚记的」里，否则像没记上）
+    order: str = Query("date", pattern="^(date|created)$"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
@@ -142,9 +145,11 @@ def list_events(
         stmt = stmt.where(Event.title.like(like) | Event.body.like(like) | Event.tags.like(like))
 
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = list(session.scalars(
-        stmt.order_by(desc(Event.event_date), desc(Event.id)).limit(limit).offset(offset)
-    ))
+    if order == "created":
+        stmt = stmt.order_by(desc(Event.created_at), desc(Event.id))
+    else:
+        stmt = stmt.order_by(desc(Event.event_date), desc(Event.id))
+    rows = list(session.scalars(stmt.limit(limit).offset(offset)))
     names = _names(session)
     mmedia = _media_map(session, [e.id for e in rows])
     mwears = _wear_map(session, rows)

@@ -1,7 +1,8 @@
 <template>
   <div>
-    <!-- 哪一天：跨零点防错（不是今天必须显式确认） -->
-    <div class="card">
+    <!-- 哪一天：跨零点防错（不是今天必须显式确认）。
+         pick 模式下日期归记录页管（选择器只管选衣物，不碰日期） -->
+    <div class="card" v-if="!pickMode">
       <h3>哪一天</h3>
       <div class="chips" style="margin-bottom: 8px">
         <van-button size="small" :type="isToday ? 'primary' : 'default'" @click="setDate(todayStr)">
@@ -78,13 +79,15 @@
         </div>
       </div>
 
-      <van-field v-model="location" label="地点" placeholder="如：家里（可空）" />
-      <van-field v-model="note" label="备注" placeholder="这次穿搭的备注（可空）" />
+      <template v-if="!pickMode">
+        <van-field v-model="location" label="地点" placeholder="如：家里（可空）" />
+        <van-field v-model="note" label="备注" placeholder="这次穿搭的备注（可空）" />
+      </template>
       <p class="muted" style="margin: 6px 0 0">
         本次选了 {{ pickedAll }} 件 —— 保存后只生成 1 条穿搭记录；同名单品会复用已有的，不会重复建。
       </p>
 
-      <template v-if="others.length">
+      <template v-if="!pickMode && others.length">
         <p class="muted" style="margin: 10px 0 4px">同时关联其他人（三人场合等，可多选）</p>
         <div class="chips">
           <van-tag
@@ -99,14 +102,28 @@
         </div>
       </template>
 
-      <div style="margin-top: 10px">
+      <!-- 图片：记录页那条链路里，这次穿搭的照归记录页的图片区（保存后挂事件），
+           pick 模式不重复放一个上传区 -->
+      <div v-if="!pickMode" style="margin-top: 10px">
         <div class="muted" style="margin-bottom: 6px">
           图片（可选，可多选；一张全身照 = 这次穿搭的照，单品靠上面勾选关联，不用一件件单独拍）
         </div>
         <van-uploader v-model="fileList" multiple :max-count="9" :preview-size="64" />
       </div>
 
-      <van-button block type="primary" style="margin-top: 12px" :loading="saving" @click="submit">
+      <!-- pick 模式：只勾，不发任何请求；真正的保存由记录页的「保存」完成 -->
+      <template v-if="pickMode">
+        <p class="muted" style="margin: 10px 0 0">
+          选好点「确定」回到记录页 —— 这时还**没有**记下来，记录页点「保存」才算真记。
+        </p>
+        <div style="display: flex; gap: 8px; margin-top: 10px">
+          <van-button block plain @click="cancelPick">取消</van-button>
+          <van-button block type="primary" @click="confirmPick">
+            确定（已选 {{ pickedAll }} 件）
+          </van-button>
+        </div>
+      </template>
+      <van-button v-else block type="primary" style="margin-top: 12px" :loading="saving" @click="submit">
         保存
       </van-button>
     </div>
@@ -125,8 +142,15 @@ const props = defineProps({
   personId: { type: Number, required: true },
   // 从单品详情「再穿一次」进来时预选这件，并自动切到它所在的类别
   preselect: { type: Array, default: () => [] },
+  // 'save'（默认）= 衣橱侧的「立即记」：自带「保存」，点它就写库；
+  // 'pick'         = 记录页的弹层选择器：只勾、不发请求，用「确定/取消」把草稿交回记录页
+  mode: { type: String, default: 'save' },
+  // pick 模式回显已有草稿：[{ item_id } | { category, name, color }]
+  initial: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['saved'])
+const emit = defineEmits(['saved', 'confirm', 'cancel'])
+// ★ 选择器模式绝不自己写库：这条链路上「保存」只有记录页那一个
+const pickMode = computed(() => props.mode === 'pick')
 
 const store = useArchiveStore()
 const WEEK = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
@@ -183,7 +207,15 @@ function isPicked(it) {
 function togglePick(it) {
   const i = picked.value.findIndex((p) => p.item_id === it.id)
   if (i >= 0) picked.value.splice(i, 1)
-  else picked.value.push({ item_id: it.id, category: it.category })
+  else
+    picked.value.push({
+      item_id: it.id,
+      category: it.category,
+      name: it.name,
+      color: it.color,
+      // 记录页的「已选」区要拿它显示缩略图（单品自己在衣橱里挂的照片）
+      media: it.media || [],
+    })
 }
 function unpick(itemId) {
   const i = picked.value.findIndex((p) => p.item_id === itemId)
@@ -213,6 +245,18 @@ async function loadItems() {
     wardrobeItems.value = []
   }
   applyPreselect()
+  applyInitial()
+}
+function pushItem(it) {
+  if (picked.value.some((p) => p.item_id === it.id)) return
+  picked.value.push({
+    item_id: it.id,
+    category: it.category,
+    name: it.name,
+    color: it.color,
+    // 记录页的「已选」区拿它显示缩略图
+    media: it.media || [],
+  })
 }
 // 预选：只认「这个人名下、还没合并」的单品，顺手把类别切过去让它可见
 function applyPreselect() {
@@ -221,11 +265,47 @@ function applyPreselect() {
   for (const id of ids) {
     const it = wardrobeItems.value.find((x) => x.id === id && !x.merged_into_id)
     if (!it) continue
-    if (!picked.value.some((p) => p.item_id === it.id)) {
-      picked.value.push({ item_id: it.id, category: it.category })
-    }
+    pushItem(it)
     pickCategory.value = it.category
   }
+}
+// pick 模式回显记录页已选的草稿：带 id 的从衣橱补全名称/照片，没 id 的（新单品）放回输入区
+function applyInitial() {
+  if (!pickMode.value) return
+  for (const p of props.initial || []) {
+    if (p && p.item_id) {
+      const it = wardrobeItems.value.find((x) => x.id === p.item_id && !x.merged_into_id)
+      if (it) pushItem(it)
+      continue
+    }
+    if (p && p.name) {
+      newItems.value.push({ category: p.category || 'other', name: p.name, color: p.color || null })
+    }
+  }
+}
+// 草稿 → 交给父级（记录页）。带 item_id 的走复用，没 id 的保存时先查后建（后端 resolve_refs）
+function selection() {
+  return [
+    ...picked.value.map((p) => ({
+      item_id: p.item_id,
+      category: p.category,
+      name: p.name,
+      color: p.color || null,
+      media: p.media || [],
+    })),
+    ...newItems.value.map((n) => ({
+      category: n.category,
+      name: n.name,
+      color: n.color || null,
+      media: [],
+    })),
+  ]
+}
+function confirmPick() {
+  emit('confirm', { items: selection() })
+}
+function cancelPick() {
+  emit('cancel')
 }
 
 function resetContent() {

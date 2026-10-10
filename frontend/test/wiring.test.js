@@ -297,20 +297,53 @@ test('服装有专有记录页 /wardrobe/new（录入页隐藏 tabbar、返回�
   assert.match(router, /path: '\/wardrobe\/new'[\s\S]*backTo: '\/wardrobe'/)
 })
 
-test('记录页不再管服装：只留「记穿搭」入口，勾单品逻辑搬进共享组件', () => {
+test('记录页记穿搭：弹层选择器只勾不写库，底部的「保存」才是唯一真保存', () => {
   const nr = src('src/views/NewRecord.vue')
-  assert.ok(!nr.includes('wardrobeCategories'), '记录页不该再有单品勾选 UI')
-  assert.ok(!nr.includes('createOutfit'), '记录页不该再直接建穿搭')
-  assert.match(nr, /const outfitEnabled = computed/)
-  assert.match(nr, /router\.push\(\{ path: '\/wardrobe\/new'/)
+  // 弹层里用的是共享组件、且是选择器模式
+  assert.match(nr, /<OutfitForm[\s\S]*mode="pick"/, '记录页要用 pick 模式的选择器')
+  assert.match(nr, /@confirm="onPickConfirm"/)
+  // ★ 选择器回调只存草稿：createOutfit 只能出现在 submit() 里（点「保存」才发请求）
+  const confirmIdx = nr.indexOf('function onPickConfirm')
+  const submitIdx = nr.indexOf('async function submit')
+  const firstOutfitCall = nr.indexOf('api.createOutfit')
+  assert.ok(confirmIdx > -1 && submitIdx > -1 && firstOutfitCall > submitIdx,
+    'createOutfit 必须只在 submit()（点保存）里调用，选择器回调不许写库')
+  assert.equal((nr.match(/api\.createOutfit/g) || []).length, 1, '记录页只应有一处建穿搭的调用')
+  // 已选区要显示单品缩略图（没有照片用类别占位）
+  assert.match(nr, /itemThumb/)
+  assert.match(nr, /class="picked-item"/)
+  assert.match(nr, /picked-ph/)
+  // 换人要清空已选（单品挂在人名下）
+  assert.match(nr, /已换人，请重新选择衣物/)
+  // 「刚记的」补齐：按写入时间排 + 人物 + 单品 chips + 首图
+  assert.match(nr, /order: 'created'/)
+  assert.match(nr, /r\.person_name/)
+  assert.match(nr, /r\.items/)
+  assert.match(nr, /recentThumb/)
+  assert.match(nr, /eventThumb/)
 })
 
-test('穿搭面板抽成 components/OutfitForm.vue：跨类别已选汇总 + 0 单品确认 + 预选', () => {
+test('旧「记穿搭」跳转卡片已移除（记录页不再被弹到别的页面去记）', () => {
+  const nr = src('src/views/NewRecord.vue')
+  assert.ok(!nr.includes("path: '/wardrobe/new'"), '记录页不该再跳去 /wardrobe/new 记穿搭')
+  assert.ok(!nr.includes('goOutfit'), '旧的跳转入口应删掉')
+})
+
+test('穿搭面板抽成 components/OutfitForm.vue：跨类别已选汇总 + 0 单品确认 + 预选 + 两种模式', () => {
   const f = src('src/components/OutfitForm.vue')
   assert.match(f, /api\.createOutfit/)
   assert.match(f, /已选 \{\{ pickedAll \}\} 件/, '分组勾选必须有跨类别汇总行')
   assert.match(f, /这次没有勾单品/, '0 单品要二次确认（衣橱按单品聚合，不勾就白记）')
   assert.match(f, /preselect/)
+  // mode='pick'：只勾、不发请求，用「确定/取消」把草稿交回记录页
+  assert.match(f, /mode: \{ type: String, default: 'save' \}/)
+  assert.match(f, /const pickMode = computed\(\(\) => props\.mode === 'pick'\)/)
+  assert.match(f, /emit\('confirm', \{ items: selection\(\) \}\)/)
+  assert.match(f, /确定（已选/, '选择器要有「确定（已选 N 件）」而不是「保存」')
+  assert.match(f, /function cancelPick\(\)/)
+  // 选择器模式不显示日期/地点/图片/保存（那些归记录页）
+  assert.match(f, /<div class="card" v-if="!pickMode">/)
+  assert.match(f, /<div v-if="!pickMode" style="margin-top: 10px">/)
 })
 
 test('衣橱有两个记录入口（记一次穿着 / 单品再穿一次），都带上当前范围的人', () => {

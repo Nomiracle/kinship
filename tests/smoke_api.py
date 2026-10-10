@@ -467,8 +467,10 @@ def main() -> int:
               all(v in module_keys for v in ets.values() if v),
               "modules=%s" % sorted(module_keys))
         rec = {t["key"]: t.get("recordable", True) for t in (cfg or {}).get("event_types", [])}
-        check("服装声明 recordable=false（不在通用记录页手工新建；仍是合法 type_key）",
-              rec.get("outfit") is False and rec.get("text") is True and rec.get("period") is True,
+        # 服装现在也能在通用「记录页」新建：记录页用弹层选择器勾单品，保存走 POST /api/outfits
+        # （recordable=false 的语义留给将来别的类型）
+        check("服装可在通用记录页新建（recordable 不再为 false；仍是合法 type_key）",
+              rec.get("outfit") is True and rec.get("text") is True and rec.get("period") is True,
               str(rec)[:200])
 
         st, rel = call("POST", "/api/relations", {
@@ -588,6 +590,46 @@ def main() -> int:
               and counts2.get(PREFIX + "黑裤") == 1, str(counts2))
         check("被移出的单品不再被这条穿搭引用",
               PREFIX + "白毛衣" not in [i["name"] for i in det["items"]], str(det.get("items")))
+
+        # 记录页的「手改标题/正文」开关：POST /api/outfits 也要认（单品是真源，手改优先）
+        # （放在上面的次数断言之后：这两条会再引用黑裤，别把「次数」那条搅浑）
+        st, of3 = call("POST", "/api/outfits", {
+            "person_id": p["id"], "event_date": today.isoformat(),
+            "items": [{"item_id": it1["id"]}],
+            "title": PREFIX + "手改标题", "body": PREFIX + "手改正文"})
+        check("建穿搭可带手改标题/正文（手改优先）",
+              st == 201 and of3.get("title") == PREFIX + "手改标题"
+              and of3.get("body") == PREFIX + "手改正文",
+              "status=%s %s" % (st, str(of3)[:160]))
+        if st == 201:
+            created_events.append(of3["id"])
+        st, of4 = call("POST", "/api/outfits", {
+            "person_id": p["id"], "event_date": today.isoformat(),
+            "items": [{"item_id": it1["id"]}]})
+        check("不给标题/正文时仍按单品自动渲染（默认行为不变）",
+              st == 201 and PREFIX + "黑裤" in (of4.get("title") or ""), str(of4)[:160])
+        if st == 201:
+            created_events.append(of4["id"])
+
+        # 记录页「刚记的」排序：order=created 按写入时间（记到过去某天也得排在最前）
+        old_written_day = (today - dt.timedelta(days=30)).isoformat()
+        st_old, e_old = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "text", "event_date": old_written_day,
+            "title": PREFIX + "很久以前但刚写入"})
+        if st_old == 201:
+            created_events.append(e_old["id"])
+        st_c, by_created = call("GET", "/api/events?person_id=%d&limit=5&order=created" % p["id"])
+        st_d, by_date = call("GET", "/api/events?person_id=%d&limit=5" % p["id"])
+        first_created = ((by_created or {}).get("items") or [{}])[0]
+        first_date = ((by_date or {}).get("items") or [{}])[0]
+        check("order=created：按写入时间排（刚写入的旧日期记录排第一）",
+              st_c == 200 and first_created.get("id") == e_old["id"],
+              "status=%s %s" % (st_c, str(by_created)[:200]))
+        check("默认仍按事件日期排（时间轴语义不变）",
+              st_d == 200 and first_date.get("id") != e_old["id"],
+              "status=%s %s" % (st_d, str(first_date)[:160]))
+        st_bad, _ = call("GET", "/api/events?order=bogus", expect=422)
+        check("order 只接受 date/created（其余 422，不静默忽略）", st_bad == 422, "status=%s" % st_bad)
 
         # 相处：改日期/地点必须同步明细，否则「多久没见」与统计一直用旧日期算
         st, e_meet = call("POST", "/api/events", {

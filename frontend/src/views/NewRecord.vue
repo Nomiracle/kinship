@@ -39,15 +39,29 @@
       </p>
     </div>
 
-    <!-- 服装有专有流程（衣橱）：这里只留入口，不再把「勾单品」混进通用记事 -->
-    <div class="card" v-if="outfitEnabled">
-      <h3>记穿搭（服装）</h3>
+    <!-- 穿搭：先在弹层「选择衣物」里勾好，回到本页显示已选（带缩略图），
+         本页底部那个「保存」才是唯一的真保存（弹层里不会写库） -->
+    <div class="card" v-if="type === 'outfit'">
+      <h3>穿搭 · 选了哪几件</h3>
       <p class="muted" style="margin: 0 0 8px">
-        服装已独立成「衣橱」的专有流程：勾单品、累加穿次数、照片挂这次穿搭。
+        先点「选择衣物」在弹层里勾（单品挂在人名下，记谁就选谁的衣橱）。选好回到这里，
+        底部点「保存」才真记下来。
       </p>
-      <van-button block size="small" type="primary" @click="goOutfit">
-        ＋ 记一次穿着（今天）
-      </van-button>
+      <div v-if="picked.length" class="picked-grid">
+        <div v-for="p in picked" :key="pickKey(p)" class="picked-item">
+          <img v-if="thumbOf(p)" :src="thumbOf(p)" :alt="p.name" />
+          <span v-else class="picked-ph">{{ categoryLabel(p.category) }}</span>
+          <div class="picked-name">{{ pickLabel(p) }}</div>
+        </div>
+      </div>
+      <p v-else class="muted" style="margin: 0 0 8px">还没选衣物 —— 点下面按钮打开衣橱勾选</p>
+      <div style="display: flex; gap: 8px">
+        <van-button size="small" type="primary" @click="openPicker">选择衣物</van-button>
+        <van-button v-if="picked.length" size="small" plain @click="picked = []">清空</van-button>
+      </div>
+      <p class="muted" style="margin: 8px 0 0">
+        已选 {{ picked.length }} 件 —— 保存后只生成 1 条穿搭记录；同名单品会复用已有的，不会重复建。
+      </p>
     </div>
 
     <div class="card">
@@ -73,17 +87,42 @@
 
     <div class="card">
       <h3>内容</h3>
-      <van-field v-model="title" :label="titleLabel" :placeholder="titlePlaceholder" />
 
-      <van-field
-        v-if="type === 'text' || type === 'health' || type === 'mood'"
-        v-model="body"
-        type="textarea"
-        rows="3"
-        autosize
-        label="详细"
-        placeholder="她说过的、穿过的、发生的事…"
-      />
+      <!-- 服装：标题/正文默认按勾选的单品自动生成（单品是真源）；要手改就打开开关 -->
+      <template v-if="type === 'outfit'">
+        <van-field v-model="note" label="备注" placeholder="这次穿搭的备注（可空）" />
+        <van-field v-model="tags" label="标签" placeholder="逗号分隔，便于以后检索" />
+        <van-cell title="手改标题 / 正文">
+          <template #right-icon>
+            <van-switch v-model="manualText" size="20" />
+          </template>
+        </van-cell>
+        <template v-if="manualText">
+          <van-field v-model="title" label="标题" placeholder="留空则按单品自动生成" />
+          <van-field
+            v-model="body"
+            type="textarea"
+            rows="3"
+            autosize
+            label="正文"
+            placeholder="留空则按单品自动生成"
+          />
+        </template>
+        <p class="muted">不手改时，标题/正文按勾选的单品自动生成（单品才是真源）。</p>
+      </template>
+
+      <template v-else>
+        <van-field v-model="title" :label="titleLabel" :placeholder="titlePlaceholder" />
+
+        <van-field
+          v-if="type === 'text' || type === 'health' || type === 'mood'"
+          v-model="body"
+          type="textarea"
+          rows="3"
+          autosize
+          label="详细"
+          placeholder="她说过的、穿过的、发生的事…"
+        />
 
       <template v-if="type === 'period'">
         <p class="muted">
@@ -101,15 +140,16 @@
         </van-cell>
       </template>
 
-      <van-field
-        v-if="type === 'text'"
-        v-model="tags"
-        label="标签"
-        placeholder="逗号分隔，便于以后检索"
-      />
+        <van-field
+          v-if="type === 'text'"
+          v-model="tags"
+          label="标签"
+          placeholder="逗号分隔，便于以后检索"
+        />
+      </template>
 
       <div v-if="mediaEnabled" style="margin-top: 10px">
-        <div class="muted" style="margin-bottom: 6px">图片（可选，可多选；iPhone 拍的 HEIC 会自动转）</div>
+        <div class="muted" style="margin-bottom: 6px">{{ mediaHint }}</div>
         <van-uploader v-model="fileList" multiple :max-count="9" :preview-size="64" />
       </div>
       <p v-else class="muted" style="margin-top: 10px">（这个人没开「图片」模块，附件区已隐藏）</p>
@@ -125,31 +165,60 @@
       </van-button>
     </div>
 
+    <!-- 刚记的：按「写入时间」倒序（不是事件日期 —— 记到过去某天也得出现在这儿，
+         否则像没记上），每条带 人物 / 单品 chips / 首图 -->
     <div class="card" v-if="recent.length">
       <h3>刚记的</h3>
-      <div class="row" v-for="r in recent" :key="r.id">
-        <span>
-          <van-tag plain>{{ typeLabel(r.type_key) }}</van-tag>
-          {{ r.title || r.body?.slice(0, 20) }}
-        </span>
-        <span class="muted">{{ fmt(r.event_date) }}</span>
+      <div class="recent" v-for="r in recent" :key="r.id">
+        <div class="row" style="padding: 0">
+          <span>
+            <van-tag plain>{{ typeLabel(r.type_key) }}</van-tag>
+            <span class="muted" style="margin-left: 6px">{{ r.person_name || '—' }}</span>
+          </span>
+          <span class="muted">{{ fmt(r.event_date) }}</span>
+        </div>
+        <div class="recent-title">{{ r.title || r.body?.slice(0, 20) || '（无内容）' }}</div>
+        <div v-if="recentThumb(r) || (r.items || []).length" class="recent-meta">
+          <img v-if="recentThumb(r)" class="mini" :src="recentThumb(r)" alt="这次记录的照片" />
+          <van-tag v-for="it in r.items || []" :key="it.item_id" plain size="medium">
+            {{ itemLabel(it) }}<span v-if="it.color" class="muted"> · {{ it.color }}</span>
+          </van-tag>
+        </div>
       </div>
     </div>
+
+    <!-- 选择衣物：弹层里只勾、不发任何请求；「确定」把草稿交回本页，「取消」丢弃 -->
+    <van-popup v-model:show="showPicker" position="bottom" round :style="{ height: '86%' }">
+      <div v-if="showPicker" class="pick-wrap">
+        <div class="row">
+          <h3 style="margin: 0">选择衣物 · {{ personLabel }}</h3>
+          <span class="muted" @click="showPicker = false">关闭</span>
+        </div>
+        <OutfitForm
+          mode="pick"
+          :person-id="Number(personId)"
+          :initial="picked"
+          @confirm="onPickConfirm"
+          @cancel="showPicker = false"
+        />
+      </div>
+    </van-popup>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { availableEventTypes, reconcileEventType } from '../lib/modules'
-import { normalizePersonId, scopeQuery } from '../lib/scope'
+import { normalizePersonId } from '../lib/scope'
+import { eventThumb, itemThumb, pickKey, pickLabel, toOutfitRefs } from '../lib/outfit-pick'
+import OutfitForm from '../components/OutfitForm.vue'
 
 const store = useArchiveStore()
 const route = useRoute()
-const router = useRouter()
 const WEEK = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
 const type = ref('text')
@@ -163,11 +232,8 @@ const personLabel = computed(() => (personObj.value ? store.displayName(personOb
 // 绑了 module 的类型要求该模块已启用；没绑 module 的（文字/情绪/里程碑/爱好/社交）任何时候都能记
 const availableTypes = computed(() => availableEventTypes(store.eventTypes, modules.value))
 const mediaEnabled = computed(() => modules.value.includes('media'))
-// 服装不在这里记（已迁到衣橱专有页），只留一个入口卡片
-const outfitEnabled = computed(() => modules.value.includes('outfit'))
-function goOutfit() {
-  router.push({ path: '/wardrobe/new', query: scopeQuery(personId.value) })
-}
+// 服装：本页用弹层「选择衣物」勾单品（选择器本身不写库），
+// 底部的「保存」是唯一的真保存 —— 走 POST /api/outfits（/wardrobe/new 留给衣橱侧的「立即记」）
 
 async function loadModules() {
   if (!personId.value) return
@@ -187,6 +253,11 @@ watch(personId, async () => {
     skipNextPick = false
     return
   }
+  // 单品挂在人名下：换人后原来的「已选」必定对不上（后端 resolve_refs 也会拒绝跨人引用）
+  if (picked.value.length) {
+    picked.value = []
+    showToast('已换人，请重新选择衣物')
+  }
   await loadModules()
 })
 // 同时在场的人（三人场合）：事件会同时挂到这些人名下
@@ -201,6 +272,47 @@ function toggleExtra(id) {
 function onPickPerson(e) {
   const id = e.target.value
   if (id) store.setCurrentPerson(id)
+}
+
+// ---- 穿搭草稿（本页的「已选」）----
+// 弹层选择器只把结果交回这里：带 item_id 的复用已有单品，{category,name,color} 的保存时先查后建。
+// ★ 这一层不写库：本页底部的「保存」是这条链路上唯一的真保存。
+const picked = ref([])
+const showPicker = ref(false)
+const note = ref('')
+const manualText = ref(false)
+
+const mediaHint = computed(() =>
+  type.value === 'outfit'
+    ? '图片（可选，可多选；一张全身照 = 这次穿搭的照，单品靠上面勾选选择）'
+    : '图片（可选，可多选；iPhone 拍的 HEIC 会自动转）'
+)
+function thumbOf(p) {
+  return itemThumb(p, api.mediaUrl)
+}
+function recentThumb(r) {
+  return eventThumb(r, api.mediaUrl)
+}
+function categoryLabel(key) {
+  return store.wardrobeCategoryLabel(key)
+}
+// 隐私模式：敏感单品在浏览态打码（与时间轴同一口径）
+function itemLabel(it) {
+  return store.privacyMode && it.sensitivity === 'sensitive' ? '●●●' : it.name
+}
+function openPicker() {
+  if (!personId.value) {
+    showToast('先选一个人')
+    return
+  }
+  showPicker.value = true
+}
+function onPickConfirm(payload) {
+  picked.value = (payload && payload.items) || []
+  showPicker.value = false
+  showToast(
+    picked.value.length ? `已选 ${picked.value.length} 件，点「保存」才记下来` : '没有勾任何单品'
+  )
 }
 
 const eventDate = ref('')
@@ -285,6 +397,10 @@ function resetContent() {
   location.value = ''
   hours.value = ''
   overnight.value = false
+  // 穿搭草稿也要清：保存成功后不能把上一次的「已选」留在页面上
+  picked.value = []
+  note.value = ''
+  manualText.value = false
 }
 
 async function submit() {
@@ -310,6 +426,22 @@ async function submit() {
       return
     }
   }
+  // 服装：没勾单品也能记，但衣橱是按单品聚合的 —— 先二次确认；
+  // 「去选衣物」就直接把选择器打开，别让人回头找按钮
+  if (type.value === 'outfit' && picked.value.length === 0) {
+    try {
+      await showConfirmDialog({
+        title: '这次没有勾单品',
+        message:
+          '没有关联任何单品 → 衣橱里不会计入（穿次数/最近穿着都不会变），只在时间轴留一条记录。\n确定这样保存吗？',
+        confirmButtonText: '就这样保存',
+        cancelButtonText: '去选衣物',
+      })
+    } catch {
+      openPicker()
+      return
+    }
+  }
   saving.value = true
   try {
     const payload = {
@@ -329,11 +461,28 @@ async function submit() {
       payload.overnight = overnight.value
       payload.hours = hours.value ? Number(hours.value) : null
     }
-    const created = await api.createEvent(payload)
+    // ★ 服装走穿搭接口（1 条事件 + N 个单品引用，穿次数随之累加）；其它类型走通用事件接口
+    const created =
+      type.value === 'outfit'
+        ? await api.createOutfit({
+            person_id: Number(personId.value),
+            event_date: eventDate.value,
+            items: toOutfitRefs(picked.value),
+            note: note.value || null,
+            tags: tags.value || null,
+            // 手改过才提交标题/正文；没手改就让后端按单品渲染（单品才是真源）
+            title: manualText.value ? title.value || null : null,
+            body: manualText.value ? body.value || null : null,
+            person_ids: extraIds.value.length
+              ? [...new Set([Number(personId.value), ...extraIds.value])]
+              : null,
+          })
+        : await api.createEvent(payload)
     const ok = await uploadPickedFiles((created && created.id) || null)
-    if (ok === null) showToast('已记录')
-    else if (ok) showToast(`已记录，含 ${ok} 张图片`)
-    else showToast('已记录（图片未上传成功）')
+    const what = type.value === 'outfit' ? '穿搭' : ''
+    if (ok === null) showToast(`已记录${what}`)
+    else if (ok) showToast(`已记录${what}，含 ${ok} 张图片`)
+    else showToast(`已记录${what}（图片未上传成功）`)
     resetContent()
     await loadRecent()
   } catch (e) {
@@ -344,7 +493,8 @@ async function submit() {
 }
 
 async function loadRecent() {
-  const res = await api.events({ person_id: personId.value, limit: 5 })
+  // ★ 按写入时间倒序（order=created），不是事件日期：记到过去某天的记录也得出现在「刚记的」里
+  const res = await api.events({ person_id: personId.value, limit: 5, order: 'created' })
   recent.value = res.items || []
 }
 
@@ -386,9 +536,68 @@ watch(
 .picker {
   width: 100%;
   padding: 8px;
-  border: 1px solid #ebedf0;
   border-radius: 8px;
-  background: #fff;
+  border: 1px solid #ebedf0;
   font-size: 14px;
+}
+/* 已选衣物：缩略图 + 名称（单品在衣橱里没挂照片时用类别色块占位） */
+.picked-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.picked-item {
+  width: 72px;
+}
+.picked-item img,
+.picked-ph {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  display: block;
+  background: #f2f3f5;
+  object-fit: cover;
+}
+.picked-ph {
+  color: #969799;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.picked-name {
+  font-size: 12px;
+  color: #323233;
+  margin-top: 2px;
+  word-break: break-all;
+}
+/* 刚记的：每条一小块（人物 / 单品 chips / 首图） */
+.recent + .recent {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f2f3f5;
+}
+.recent-title {
+  font-size: 13px;
+  margin: 2px 0 4px;
+}
+.recent-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recent-meta .mini {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+/* 选择衣物弹层：内容自己滚，别让弹层撑破 */
+.pick-wrap {
+  height: 100%;
+  padding: 12px;
+  overflow-y: auto;
 }
 </style>
