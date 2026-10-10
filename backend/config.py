@@ -9,7 +9,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 if sys.version_info >= (3, 11):
     import tomllib as _toml
@@ -66,6 +66,9 @@ class Settings:
     upcoming_days: int = 10
     cycle_window_margin_days: int = 3
     todo_backlog_threshold: int = 5
+    # 易孕期 / 相对安全期参考（挂在生理期模块里，不单独开模块）。
+    # 关掉它就只剩「预测下次经期」——注意这是**生活参考**，不是避孕依据。
+    show_fertility_window: bool = True
 
     relation_types: List[Dict[str, Any]] = field(default_factory=list)
     modules: List[Dict[str, Any]] = field(default_factory=list)
@@ -98,11 +101,50 @@ class Settings:
                 return m
         return None
 
-    def default_modules_for(self, relation_type: str) -> List[str]:
+    def default_modules_for(self, relation_type: str, gender: Optional[str] = None) -> List[str]:
+        """新建人物时的默认模块 = 基础清单 + 满足条件的「条件模块」。
+
+        为什么要两段：`relation_types[].default_modules` 是「这个关系类型一般都开」，
+        而生理期这种还要看性别（伴侣的女性才自动开，男性根本不该有）。
+        条件模块靠模块自己的 `requires_relation` / `requires_gender` 声明，
+        不再往每个关系类型里各抄一遍（抄一份就多一个会漏改的地方）。
+
+        gender 为空 = 未知 → **不满足** requires_gender（未知不自动开敏感模块），
+        但这类人不被禁止手动开（见 gender_allows_module）。
+        """
+        base: List[str] = []
         for rt in self.relation_types:
             if rt.get("key") == relation_type:
-                return list(rt.get("default_modules") or [])
-        return []
+                base = list(rt.get("default_modules") or [])
+                break
+        for m in self.modules:
+            key = m.get("key")
+            if not key or key in base:
+                continue
+            rels = list(m.get("requires_relation") or [])
+            genders = list(m.get("requires_gender") or [])
+            if not rels and not genders:
+                continue  # 无条件模块：只在基础清单里出现，不自动加
+            if rels and relation_type not in rels:
+                continue
+            if genders and (not gender or gender not in genders):
+                continue
+            base.append(key)
+        return base
+
+    def gender_allows_module(self, gender: Optional[str], key: Optional[str]) -> bool:
+        """这个性别能不能用这个模块（不能 → 前端不展示、PUT 也不接受）。
+
+        未知（None）一律放行 —— 排除未知会把已有数据/迁移期卡死，
+        而「不自动开」已经由 default_modules_for 保证了。
+        """
+        if not key:
+            return False
+        m = self.module(key) or {}
+        genders = list(m.get("requires_gender") or [])
+        if not genders:
+            return True
+        return gender is None or gender in genders
 
     def is_sensitive_module(self, key: str) -> bool:
         m = self.module(key)
@@ -210,6 +252,7 @@ def load_settings() -> Settings:
     s.no_contact_days = int(rem.get("no_contact_days", s.no_contact_days))
     s.upcoming_days = int(rem.get("upcoming_days", s.upcoming_days))
     s.cycle_window_margin_days = int(rem.get("cycle_window_margin_days", s.cycle_window_margin_days))
+    s.show_fertility_window = _bool(rem.get("show_fertility_window", s.show_fertility_window))
     s.todo_backlog_threshold = int(rem.get("todo_backlog_threshold", s.todo_backlog_threshold))
 
     return s

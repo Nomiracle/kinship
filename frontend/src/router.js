@@ -11,6 +11,7 @@ const views = {
   wardrobe: () => import('./views/Wardrobe.vue'),
   relations: () => import('./views/Relations.vue'),
   gallery: () => import('./views/Gallery.vue'),
+  people: () => import('./views/PeopleView.vue'),
   person: () => import('./views/PersonView.vue'),
   cycle: () => import('./views/CycleView.vue'),
   todos: () => import('./views/Todos.vue'),
@@ -18,18 +19,27 @@ const views = {
   settings: () => import('./views/SettingsView.vue'),
 }
 
+// meta 说明：
+//   title     顶栏标题
+//   tab       所属底部主 tab（子页继承父 tab，父导航高亮才准确）
+//   group     所属二级分组（渲染分组分段条）；无则不分段
+//   back      是否显示「返回」按钮（子页 / 编辑页）
+//   backTo    无历史可退时的兜底落地页（深链冷启动）
+//   hideTabbar 是否隐藏底部 tabbar（录入/编辑路由）
+//   scoped    该页只读显示「某个人/全部」的范围（顶栏范围指示器据此显示，不改全局）
 const routes = [
-  { path: '/', name: 'dashboard', component: views.dashboard },
-  { path: '/new', name: 'new', component: views.new },
-  { path: '/timeline', name: 'timeline', component: views.timeline },
-  { path: '/wardrobe', name: 'wardrobe', component: views.wardrobe },
-  { path: '/relations', name: 'relations', component: views.relations },
-  { path: '/gallery', name: 'gallery', component: views.gallery },
-  { path: '/person/:id', name: 'person', component: views.person },
-  { path: '/cycle', name: 'cycle', component: views.cycle },
-  { path: '/todos', name: 'todos', component: views.todos },
-  { path: '/search', name: 'search', component: views.search },
-  { path: '/settings', name: 'settings', component: views.settings },
+  { path: '/', name: 'dashboard', component: views.dashboard, meta: { title: '今天', tab: 'today' } },
+  { path: '/new', name: 'new', component: views.new, meta: { title: '记录', back: true, backTo: '/', hideTabbar: true } },
+  { path: '/timeline', name: 'timeline', component: views.timeline, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/wardrobe', name: 'wardrobe', component: views.wardrobe, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/gallery', name: 'gallery', component: views.gallery, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/people', name: 'people', component: views.people, meta: { title: '人物', tab: 'people', group: 'people' } },
+  { path: '/relations', name: 'relations', component: views.relations, meta: { title: '人物', tab: 'people', group: 'people' } },
+  { path: '/person/:id', name: 'person', component: views.person, meta: { title: '人物', tab: 'people', back: true, backTo: '/people', scoped: true } },
+  { path: '/cycle', name: 'cycle', component: views.cycle, meta: { title: '生理期', back: true, backTo: '/people', scoped: true } },
+  { path: '/todos', name: 'todos', component: views.todos, meta: { title: '待办', tab: 'todos', scoped: true } },
+  { path: '/search', name: 'search', component: views.search, meta: { title: '搜索', back: true, backTo: '/' } },
+  { path: '/settings', name: 'settings', component: views.settings, meta: { title: '设置', back: true, backTo: '/' } },
 ]
 
 export function prefetchViews() {

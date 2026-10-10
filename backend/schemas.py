@@ -18,6 +18,8 @@ class PersonIn(BaseModel):
     display_name: str = Field(min_length=1, max_length=64)
     relation_type: str = "friend"
     is_self: bool = False
+    # 性别：female/male/other；不传 = 未知（未知性别不自动开生理期，但可手动开）
+    gender: Optional[str] = None
     birthday: Optional[dt.date] = None
     birthday_lunar: bool = False
     lunar_month: Optional[int] = None
@@ -37,6 +39,7 @@ class PersonIn(BaseModel):
 class PersonPatch(BaseModel):
     display_name: Optional[str] = None
     relation_type: Optional[str] = None
+    gender: Optional[str] = None
     birthday: Optional[dt.date] = None
     birthday_lunar: Optional[bool] = None
     lunar_month: Optional[int] = None
@@ -58,6 +61,7 @@ class PersonOut(BaseModel):
     display_name: str
     relation_type: str
     is_self: bool
+    gender: Optional[str] = None
     birthday: Optional[dt.date] = None
     birthday_lunar: bool
     lunar_month: Optional[int] = None
@@ -72,6 +76,12 @@ class PersonOut(BaseModel):
     familiarity: int = 1
     via_person_id: Optional[int] = None
     via_name: Optional[str] = None
+    # 生日的「明确写法 + 还有几天 + 满几岁」（GET /persons 时算好；写入接口为 None）。
+    # 为什么不只在今天卡片给：只有天数没有日期，最容易被误读成别的东西的倒计时。
+    birthday_text: Optional[str] = None
+    birthday_next: Optional[dt.date] = None
+    birthday_days_left: Optional[int] = None
+    age_next: Optional[int] = None
 
 
 class ModulesIn(BaseModel):

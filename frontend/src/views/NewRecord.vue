@@ -176,11 +176,15 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
+import { availableEventTypes, reconcileEventType } from '../lib/modules'
+import { normalizePersonId } from '../lib/scope'
 
 const store = useArchiveStore()
+const route = useRoute()
 const WEEK = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
 const type = ref('text')
@@ -192,9 +196,7 @@ const personObj = computed(
 )
 const personLabel = computed(() => (personObj.value ? store.displayName(personObj.value) : '这个人'))
 // 绑了 module 的类型要求该模块已启用；没绑 module 的（文字/情绪/里程碑/爱好/社交）任何时候都能记
-const availableTypes = computed(() =>
-  store.eventTypes.filter((t) => !t.module || modules.value.includes(t.module))
-)
+const availableTypes = computed(() => availableEventTypes(store.eventTypes, modules.value))
 const mediaEnabled = computed(() => modules.value.includes('media'))
 
 async function loadModules() {
@@ -206,7 +208,7 @@ async function loadModules() {
     modules.value = []
   }
   // 切人后当前选中的类型可能已不可用 → 回退到「文字」，否则会记出这个人没有的类型
-  if (!availableTypes.value.some((t) => t.key === type.value)) type.value = 'text'
+  type.value = reconcileEventType(type.value, availableTypes.value)
 }
 // onMounted 第一次定人时会自己并发拉一遍，这次 watcher 要跳过，否则请求发两遍
 let skipNextPick = false
@@ -452,7 +454,13 @@ onMounted(async () => {
   // 三件事互不依赖 → 并发（慢链路上少两个往返）。
   // 先举标志再赋值：watch(personId) 会在下一个微任务触发，见标志就跳过（不重复发请求）。
   skipNextPick = true
-  personId.value = store.currentPersonId || store.others[0]?.id || store.persons[0]?.id
+  // 「＋记录」FAB / 个人页入口会带 ?person=<id>：优先用它（本页照此记到那个人），
+  // 其次跟随全局当前人物，再退到第一个可记录的人。
+  personId.value =
+    normalizePersonId(route.query.person) ||
+    store.currentPersonId ||
+    store.others[0]?.id ||
+    store.persons[0]?.id
   await Promise.all([loadModules(), loadWardrobe(), loadRecent()])
   skipNextPick = false // 万一 personId 没变化（watcher 没触发），别把标志留在 true
 })
@@ -462,7 +470,11 @@ watch(
   () => store.persons.length,
   async (n) => {
     if (n && !personId.value) {
-      personId.value = store.currentPersonId || store.others[0]?.id || store.persons[0]?.id
+      personId.value =
+        normalizePersonId(route.query.person) ||
+        store.currentPersonId ||
+        store.others[0]?.id ||
+        store.persons[0]?.id
       await Promise.all([loadModules(), loadWardrobe()])
     }
   }

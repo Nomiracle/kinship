@@ -59,6 +59,9 @@ ENV_CANDIDATES = [
 
 mcp = _Server("kinship-archive")
 
+# 性别取值 → 中文（跟 /api/config 的 genders 一致；模型看得懂中文更省事）
+_GENDER_CN = {"female": "女", "male": "男", "other": "其他"}
+
 
 # ------------------------------------------------------------------ 基础设施
 
@@ -173,14 +176,19 @@ def _p_card(p: Dict[str, Any]) -> str:
     if p.get("is_self"):
         bits.append("[本人]")
     bits.append("关系=%s" % p.get("relation_type"))
+    bits.append("性别=%s" % _GENDER_CN.get(p.get("gender") or "", "未知"))
     bits.append("圈子=%s" % p.get("circle"))
     bits.append("熟悉度=%s" % p.get("familiarity"))
     if p.get("via_name"):
         bits.append("通过=%s" % p["via_name"])
-    if p.get("birthday"):
+    if p.get("birthday_text"):
+        bits.append("生日=%s" % p["birthday_text"])
+    elif p.get("birthday"):
         bits.append("生日=%s" % p["birthday"])
     if p.get("birthday_lunar") and p.get("lunar_month"):
         bits.append("农历=%s月%s日" % (p["lunar_month"], p["lunar_day"]))
+    if p.get("birthday_next"):
+        bits.append("下次=%s（%s 天后）" % (p["birthday_next"], p.get("birthday_days_left")))
     if p.get("aliases"):
         bits.append("别名=%s" % p["aliases"])
     if p.get("sensitivity") == "sensitive":
@@ -605,7 +613,7 @@ def add_cycle(who: str, start_date: Optional[str] = None, end_date: Optional[str
 @mcp.tool()
 @_safe
 def add_person(name: str, relation_type: str = "friend", circle: str = "self",
-               birthday: Optional[str] = None, lunar: bool = False,
+               gender: Optional[str] = None, birthday: Optional[str] = None, lunar: bool = False,
                lunar_month: Optional[int] = None, lunar_day: Optional[int] = None,
                aliases: Optional[str] = None, notes: Optional[str] = None,
                via: Optional[str] = None, familiarity: int = 1,
@@ -613,13 +621,14 @@ def add_person(name: str, relation_type: str = "friend", circle: str = "self",
     """新建一个人物档案。
 
     relation_type: partner/family/friend/colleague/acquaintance/self，
+    gender: female/male/other（不传 = 未知；只有「伴侣 + 女」会自动开生理期模块），
     circle: self/partner/shared，via: 通过谁认识（姓名），
     birthday 传公历 YYYY-MM-DD；农历生日就传 lunar=True + lunar_month/lunar_day。
     """
     _require_write()
     payload: Dict[str, Any] = {
         "display_name": name, "relation_type": relation_type, "circle": circle,
-        "birthday": birthday, "birthday_lunar": lunar,
+        "gender": gender, "birthday": birthday, "birthday_lunar": lunar,
         "lunar_month": lunar_month, "lunar_day": lunar_day,
         "aliases": aliases, "notes": notes, "familiarity": familiarity,
         "sensitivity": sensitivity,

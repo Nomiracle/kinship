@@ -13,7 +13,10 @@
       </div>
       <van-field v-model="from" type="date" label="从" />
       <van-field v-model="to" type="date" label="到" />
-      <p class="muted" style="margin: 6px 0 0">显示：{{ store.scopeLabel }}（换人在首页）</p>
+      <p class="muted" style="margin: 6px 0 0">
+        显示：{{ scopeLabelText }}<template v-if="scopedFromQuery">（本页只看这个人）</template>
+        <template v-else>（换人在首页）</template>
+      </p>
     </div>
 
     <div class="card" v-for="e in items" :key="e.id">
@@ -167,18 +170,32 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
+import { resolveScopedPerson } from '../lib/scope'
 
 const store = useArchiveStore()
+const route = useRoute()
 const type = ref('')
 const from = ref('')
 const to = ref('')
 const items = ref([])
 const total = ref(0)
-const singlePerson = computed(() => !!store.currentPersonId)
+// 本页实际显示谁：优先 URL ?person（从个人页点进来），否则跟随全局；都不写回全局。
+const scopedFromQuery = computed(() => !!resolveScopedPerson(route.query.person, null))
+const effectivePersonId = computed(() =>
+  resolveScopedPerson(route.query.person, store.currentPersonId)
+)
+const scopeLabelText = computed(() => {
+  const id = effectivePersonId.value
+  if (!id) return '全部'
+  const p = store.persons.find((x) => x.id === id)
+  return p ? store.displayName(p) : '全部'
+})
+const singlePerson = computed(() => !!effectivePersonId.value)
 
 const filters = computed(() => [{ key: '', label: '全部' }, ...store.eventTypes])
 
@@ -218,7 +235,7 @@ function itemLabel(it) {
 
 async function load() {
   const res = await api.events({
-    person_id: store.currentPersonId || undefined,
+    person_id: effectivePersonId.value || undefined,
     type_key: type.value || undefined,
     date_from: from.value || undefined,
     date_to: to.value || undefined,
@@ -363,7 +380,13 @@ function openFull(m) {
   window.open(api.mediaUrl(m, false), '_blank')
 }
 
-watch([type, from, to], load)
+watch([type, from, to, effectivePersonId], load)
+
+// 内联编辑弹层打开时置共享的「正在编辑」态 —— App 据此隐藏底部 tabbar / 「＋记录」，
+// 免得编辑时下面还叠着一层导航。关闭或离开本页都要复位（onUnmounted 兜底）。
+watch(showEdit, (v) => store.setEditingRecord(v))
+onUnmounted(() => store.setEditingRecord(false))
+
 onMounted(load)
 </script>
 

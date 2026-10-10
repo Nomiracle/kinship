@@ -1,6 +1,7 @@
 """核心资源：配置、人、模块开关、属性、关系边。"""
 from __future__ import annotations
 
+import datetime as dt
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import CommitRoute, get_session
 from ..models import Attribute, Event, Interaction, Media, Person, PersonModule, PersonRelation
+from ..services import insight
 from ..services import media as media_svc
 from ..schemas import (
     AttributeIn,
@@ -36,6 +38,11 @@ def get_config():
         "locale": settings.locale,
         "timezone": settings.timezone,
         "relation_types": settings.relation_types,
+        "genders": [
+            {"key": "female", "label": "女"},
+            {"key": "male", "label": "男"},
+            {"key": "other", "label": "其他"},
+        ],
         "modules": settings.modules,
         "attribute_categories": settings.attribute_categories,
         # 服装：单品类别（key/label/slot）与判重同义词表 —— 前端渲染与提示都读这里
@@ -48,6 +55,7 @@ def get_config():
             "no_contact_days": settings.no_contact_days,
             "upcoming_days": settings.upcoming_days,
             "cycle_window_margin_days": settings.cycle_window_margin_days,
+            "show_fertility_window": settings.show_fertility_window,
         },
         "event_types": [
             {"key": "text", "label": "文字", "icon": "edit"},
@@ -78,6 +86,18 @@ def _with_via_name(session: Session, person: Person) -> Person:
     return person
 
 
+def _person_out(person: Person, today: Optional[dt.date] = None) -> PersonOut:
+    """人物对外表示 = 库里字段 + 生日派生字段（明确写法 / 下次日期 / 还有几天 / 满几岁）。
+
+    派生字段不进 ORM 模型（不落库、每次现算），所以在这里显式组装 ——
+    前端任何页面都能拿到「生日 11-06 · 还有 28 天」，不用各算一份。
+    """
+    out = PersonOut.model_validate(person)
+    for k, v in insight.birthday_fields(person, today).items():
+        setattr(out, k, v)
+    return out
+
+
 @router.get("/persons", response_model=List[PersonOut])
 def list_persons(include_inactive: bool = False, circle: Optional[str] = None,
                  session: Session = Depends(get_session)):
@@ -90,7 +110,7 @@ def list_persons(include_inactive: bool = False, circle: Optional[str] = None,
     names = {p.id: p.display_name for p in session.scalars(select(Person))}
     for p in rows:
         p.via_name = names.get(p.via_person_id) if p.via_person_id else None
-    return rows
+    return [_person_out(p) for p in rows]
 
 
 @router.post("/persons", response_model=PersonOut, status_code=201)
@@ -103,8 +123,13 @@ def create_person(payload: PersonIn, session: Session = Depends(get_session)):
     person = Person(**data)
     session.add(person)
     session.flush()
-    keys = module_keys if module_keys is not None else settings.default_modules_for(person.relation_type)
+    # 默认模块要带上性别（伴侣 + 女 → 自动开生理期；男性不自动开），
+    # 显式传的也要过一遍性别门槛，否则等于绕过 UI 给男性开了生理期
+    keys = (module_keys if module_keys is not None
+            else settings.default_modules_for(person.relation_type, person.gender))
     for k in keys:
+        if not settings.gender_allows_module(person.gender, k):
+            continue
         session.add(PersonModule(person_id=person.id, module_key=k, enabled=True))
     write_audit(session, "person", person.id, "create")
     session.flush()
@@ -116,7 +141,7 @@ def get_person(person_id: int, session: Session = Depends(get_session)):
     person = session.get(Person, person_id)
     if not person:
         raise HTTPException(404, "找不到这个人")
-    return _with_via_name(session, person)
+    return _person_out(_with_via_name(session, person))
 
 
 @router.patch("/persons/{person_id}", response_model=PersonOut)
@@ -128,7 +153,7 @@ def patch_person(person_id: int, payload: PersonPatch, session: Session = Depend
         setattr(person, k, v)
     write_audit(session, "person", person_id, "update")
     session.flush()
-    return _with_via_name(session, person)
+    return _person_out(_with_via_name(session, person))
 
 
 @router.delete("/persons/{person_id}", status_code=204)
@@ -164,22 +189,35 @@ def delete_person(person_id: int, session: Session = Depends(get_session)):
 
 @router.get("/persons/{person_id}/modules")
 def get_modules(person_id: int, session: Session = Depends(get_session)):
+    person = session.get(Person, person_id)
+    if not person:
+        raise HTTPException(404, "找不到这个人")
     rows = list(session.scalars(
         select(PersonModule).where(PersonModule.person_id == person_id)
     ))
     enabled = {r.module_key for r in rows if r.enabled}
+    # available = 这个性别**能开**的模块（男性看不到生理期开关）；
+    # blocked = 已启用但当前性别不允许（比如把性别从女改成男之后遗留的开关），
+    # 前端据此同时隐藏入口与卡片，并提示一句「已启用但不适用」。
+    available = [m.get("key") for m in settings.modules
+                 if settings.gender_allows_module(person.gender, m.get("key"))]
     return {
         "enabled": sorted(enabled),
-        "available": [m.get("key") for m in settings.modules],
+        "available": available,
+        "blocked": sorted(enabled - set(available)),
+        "gender": person.gender,
     }
 
 
 @router.put("/persons/{person_id}/modules")
 def put_modules(person_id: int, payload: ModulesIn, session: Session = Depends(get_session)):
-    if not session.get(Person, person_id):
+    person = session.get(Person, person_id)
+    if not person:
         raise HTTPException(404, "找不到这个人")
     valid = {m.get("key") for m in settings.modules}
-    wanted = {k for k in payload.modules if k in valid}
+    # 性别不允许的模块直接忽略（不是 400）：前端只是不展示，别让一个隐藏开关把整次保存搞失败
+    wanted = {k for k in payload.modules
+              if k in valid and settings.gender_allows_module(person.gender, k)}
     rows = {r.module_key: r for r in session.scalars(
         select(PersonModule).where(PersonModule.person_id == person_id)
     )}

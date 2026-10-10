@@ -41,6 +41,14 @@ export const useArchiveStore = defineStore('archive', {
     // 隐私模式：列表/下拉里的敏感人物打码。默认关（安全默认），
     // 打开后写进 localStorage —— 否则每次刷新都被重置，等于没用
     privacyMode: localStorage.getItem('kinship_privacy') === '1',
+    // 各人已启用的模块 key（惰性加载、按 id 缓存）：
+    // 键不存在/非数组 = 未知（加载中或失败）→ 相关入口「暂不隐藏」，legacy 路由仍可达
+    personModules: {},
+    // 正在加载模块的人（避免重复请求）
+    modulesLoading: {},
+    // 「正在编辑」共享态：时间轴的内联编辑弹层在打开时置位，
+    // App 据此隐藏底部 tabbar 与「＋记录」，避免弹层里还叠着一层导航。
+    editingRecord: false,
   }),
 
   getters: {
@@ -80,6 +88,22 @@ export const useArchiveStore = defineStore('archive', {
       const map = { 1: '只闻其名', 2: '见过', 3: '常见', 4: '很熟' }
       return (n) => map[n] || '—'
     },
+    // 性别：取值表由后端 /api/config 给（与 requires_gender 同一口径），
+    // 没加载出来时用兜底表，避免下拉框空着
+    genders(state) {
+      return state.config?.genders || [
+        { key: 'female', label: '女' },
+        { key: 'male', label: '男' },
+        { key: 'other', label: '其他' },
+      ]
+    },
+    genderLabel(state) {
+      return (key) => {
+        if (!key) return '未知'
+        const g = (state.config?.genders || []).find((x) => x.key === key)
+        return g ? g.label : key
+      }
+    },
     byCircle(state) {
       // 按圈子分组，关系页用
       return (key) => state.persons.filter((p) => p.circle === key)
@@ -109,6 +133,14 @@ export const useArchiveStore = defineStore('archive', {
       return (key) => {
         const c = (state.config?.wardrobe?.categories || []).find((x) => x.key === key)
         return c ? c.label : key
+      }
+    },
+    // 三态：true 已启用 / false 已知未启用 / null 未知（加载中或失败）
+    hasModule(state) {
+      return (personId, key) => {
+        const mods = state.personModules[personId]
+        if (!Array.isArray(mods)) return null
+        return mods.includes(key)
       }
     },
   },
@@ -165,6 +197,29 @@ export const useArchiveStore = defineStore('archive', {
     setPrivacyMode(v) {
       this.privacyMode = !!v
       localStorage.setItem('kinship_privacy', v ? '1' : '0')
+    },
+    // 惰性拉某个人的模块开关（成功才缓存；失败保持「未知」→ 对应入口不隐藏）
+    async loadModulesFor(id) {
+      const pid = Number(id)
+      if (!pid || Array.isArray(this.personModules[pid]) || this.modulesLoading[pid]) return
+      this.modulesLoading[pid] = true
+      try {
+        const res = await api.modules(pid)
+        this.personModules[pid] = res?.enabled || []
+      } catch {
+        // 加载失败：不改 personModules，保持未知 → 导航不隐藏，legacy 路由仍可达
+      } finally {
+        this.modulesLoading[pid] = false
+      }
+    },
+    // 批量补齐一组人的模块（「全部」scope 下判断「有没有人开了服装」用）
+    async ensureModules(ids) {
+      const todo = [...new Set((ids || []).map(Number).filter((n) => n > 0))]
+      await Promise.all(todo.map((id) => this.loadModulesFor(id)))
+    },
+    // 时间轴内联编辑：置位/复位共享的「正在编辑」态（App 据此隐藏 tabbar/FAB）
+    setEditingRecord(v) {
+      this.editingRecord = !!v
     },
     async bootstrap() {
       this.loading = true

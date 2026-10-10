@@ -33,6 +33,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
 RELATION_TYPES = ("self", "partner", "family", "friend", "colleague")
+# 性别：决定「默认自动开哪些模块」以及生理期这类模块对谁可见（见 config.Settings）。
+# NULL = 未知 —— 未知性别不自动开敏感模块，但允许手动开（不阻塞任何历史数据）。
+GENDERS = ("female", "male", "other")
 
 
 class Person(Base):
@@ -45,6 +48,10 @@ class Person(Base):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
     relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="friend")
     is_self: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 性别（female/male/other；NULL = 未知）。生理期模块只对女性可见/可开，
+    # 「伴侣 + 女」新建时自动开 —— 规则在 config.Settings.default_modules_for /
+    # gender_allows_module，别在别处再写一份。
+    gender: Mapped[Optional[str]] = mapped_column(String(16))
 
     birthday: Mapped[Optional[dt.date]] = mapped_column(Date)
     birthday_lunar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

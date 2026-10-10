@@ -30,6 +30,25 @@
       </p>
     </div>
 
+    <!-- 易孕期 / 相对安全期参考（[reminder] show_fertility_window 关掉就没有这段） -->
+    <div class="card" v-if="pred && pred.fertility">
+      <h3>易孕期参考</h3>
+      <div class="row"><span>预测排卵日</span><span>{{ pred.fertility.ovulation }}</span></div>
+      <div class="row">
+        <span>易孕窗口</span>
+        <span class="warn">{{ pred.fertility.fertile_window[0] }} ~ {{ pred.fertility.fertile_window[1] }}</span>
+      </div>
+      <div class="row" v-if="pred.fertility.phase_today">
+        <span>今天</span><span>{{ pred.fertility.phase_today }}</span>
+      </div>
+      <div class="row"><span>规律性</span><span>{{ pred.fertility.regularity.text }}</span></div>
+      <div class="row" v-for="w in pred.fertility.safe_windows" :key="w.label">
+        <span>{{ w.label }}</span>
+        <span class="muted">{{ w.start }} ~ {{ w.end }}</span>
+      </div>
+      <p class="muted">{{ pred.fertility_note }}</p>
+    </div>
+
     <div class="card">
       <h3>新增一次</h3>
       <van-field v-model="form.start_date" type="date" label="开始日期" />

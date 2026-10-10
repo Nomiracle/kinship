@@ -9,6 +9,9 @@ import router, { prefetchViews } from './router'
 //   会自己带上依赖组件的样式（cell/icon/overlay/loading…），构建后 CSS 约 85KB（gzip ~22KB）。
 //   ⚠️ 以后在模板里新增 van-* 组件（或 showDialog/showNotify/showImagePreview 这类方法）
 //   时，必须在这里补一行 import，否则组件「能用但没样式」。
+// 顶栏的搜索/返回/设置图标与若干组件用到 icon 样式；按需入口会带依赖样式，
+// 这里仍显式引一次（幂等），避免将来新增图标类组件时「能用但没样式」。
+import 'vant/es/icon/style'
 import 'vant/es/button/style'
 import 'vant/es/cell/style'
 import 'vant/es/dialog/style'

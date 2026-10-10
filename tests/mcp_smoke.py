@@ -112,9 +112,14 @@ async def main() -> None:
                 # ---- 写：建人 → 记事件/属性/生理期/待办 → 回读 → 完成待办 ----
                 r = text_of(await session.call_tool("add_person", {
                     "name": TEST_NAME, "relation_type": "partner", "circle": "shared",
+                    "gender": "female",
                     "birthday": "1990-01-02", "aliases": "mcp测试、临时",
                 }))
                 check("add_person 建人成功", TEST_NAME in r, r[:160])
+                r = text_of(await session.call_tool("people", {"query": TEST_NAME}))
+                # 性别 + 生日的「明确写法 + 还有几天」都要在档案卡里（只给天数会被误读）
+                check("人物卡带性别与生日的明确写法/倒计时",
+                      "性别=女" in r and "生日=1990-01-02" in r and "下次=" in r, r[:240])
                 pid = None
                 for p in api("GET", "/api/persons"):
                     if p["display_name"] == TEST_NAME:

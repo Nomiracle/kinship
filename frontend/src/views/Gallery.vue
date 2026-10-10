@@ -60,11 +60,14 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
+import { resolveScopedPerson } from '../lib/scope'
 
 const store = useArchiveStore()
+const route = useRoute()
 const items = ref([])
 const personId = ref(null)
 const fileList = ref([])
@@ -130,9 +133,11 @@ async function remove(m) {
   await load()
 }
 
-onMounted(() => {
-  // 相册保留自己的筛选（含「全部」），但默认跟随首页选的当前人物
-  personId.value = store.currentPersonId
+onMounted(async () => {
+  await store.ensureLoaded()
+  // 相册保留自己的筛选（含「全部」）：优先 URL ?person（从个人页点进来只看这个人），
+  // 否则跟随首页选的当前人物。只读不改全局 scope。
+  personId.value = resolveScopedPerson(route.query.person, store.currentPersonId)
   load()
 })
 </script>

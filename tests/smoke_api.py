@@ -150,14 +150,62 @@ def main() -> int:
 
         st, p = call("POST", "/api/persons", {
             "display_name": PREFIX + "伴侣", "relation_type": "partner",
-            "birthday": "1990-01-01", "birthday_lunar": False,
+            "gender": "female", "birthday": "1990-01-01", "birthday_lunar": False,
         })
-        check("建 partner 人物", st == 201, "status=%s %s" % (st, p))
+        check("建 partner 人物（女）", st == 201 and p.get("gender") == "female",
+              "status=%s %s" % (st, p))
         created_persons.append(p["id"])
 
         st, mods = call("GET", "/api/persons/%d/modules" % p["id"])
-        check("partner 自动获得默认模块（含 cycle）",
+        check("伴侣 + 女 → 自动获得默认模块（含 cycle）",
               "cycle" in (mods or {}).get("enabled", []), str(mods))
+
+        # --- 性别决定生理期模块：男性不展示也开不了；未知不自动开但可手动开 ---
+        st, male = call("POST", "/api/persons", {
+            "display_name": PREFIX + "男伴侣", "relation_type": "partner", "gender": "male",
+        })
+        if st == 201:
+            created_persons.append(male["id"])
+        st_m, mods_m = call("GET", "/api/persons/%d/modules" % male["id"])
+        check("男性：默认不开 cycle，且 available 里没有（开关都不展示）",
+              st == 201 and "cycle" not in (mods_m or {}).get("enabled", [])
+              and "cycle" not in (mods_m or {}).get("available", []),
+              str(mods_m))
+        st_m2, forced = call("PUT", "/api/persons/%d/modules" % male["id"],
+                             {"modules": ["cycle", "interaction"]})
+        check("男性：PUT 强开 cycle 被忽略（不报错也不生效）",
+              st_m2 == 200 and "cycle" not in (forced or {}).get("enabled", []),
+              str(forced))
+
+        st, unknown = call("POST", "/api/persons", {
+            "display_name": PREFIX + "性别未知", "relation_type": "partner",
+        })
+        if st == 201:
+            created_persons.append(unknown["id"])
+        st_u, mods_u = call("GET", "/api/persons/%d/modules" % unknown["id"])
+        check("性别未知：不自动开 cycle，但 available 里有（可手动开）",
+              st == 201 and "cycle" not in (mods_u or {}).get("enabled", [])
+              and "cycle" in (mods_u or {}).get("available", []),
+              str(mods_u))
+        st_u2, opened = call("PUT", "/api/persons/%d/modules" % unknown["id"],
+                             {"modules": ["interaction", "cycle"]})
+        check("性别未知：手动开 cycle 能生效",
+              st_u2 == 200 and "cycle" in (opened or {}).get("enabled", []), str(opened))
+
+        st, patched = call("PATCH", "/api/persons/%d" % unknown["id"], {"gender": "male"})
+        check("性别可通过 PATCH 修改",
+              st == 200 and (patched or {}).get("gender") == "male",
+              "status=%s %s" % (st, str(patched)[:120]))
+
+        # --- 生日：明确写法 + 倒计时必须同时给（只有天数会被误读成别的倒计时）---
+        st, listed = call("GET", "/api/persons")
+        me = next((x for x in (listed or []) if x["id"] == p["id"]), None)
+        check("人物列表同时给出「生日的明确写法 + 还有几天 + 满几岁」",
+              st == 200 and me is not None
+              and me.get("birthday_text") == "1990-01-01"
+              and me.get("birthday_next") == "2027-01-01"
+              and me.get("birthday_days_left") == (dt.date(2027, 1, 1) - today).days,
+              str(me)[:200] if me else "没找到这个人")
 
         # --- 属性 KV ---
         st, attr = call("POST", "/api/attributes", {
@@ -516,6 +564,29 @@ def main() -> int:
                          {"event_date": (today - dt.timedelta(days=28)).isoformat()}, expect=409)
             check("生理期改到已占用日期 → 409（不静默失败）", st == 409, "status=%s" % st)
 
+        # --- 易孕期 / 相对安全期参考（挂在生理期里，不另开模块）---
+        st, pred2 = call("GET", "/api/cycle/prediction?person_id=%d" % p["id"])
+        fert = (pred2 or {}).get("fertility") or {}
+        fw = fert.get("fertile_window") or []
+        check("易孕期参考可算（排卵日 + 窗口 + 规律性）",
+              st == 200 and fert.get("ovulation") and len(fw) == 2
+              and (fert.get("regularity") or {}).get("text")
+              and isinstance(fert.get("safe_windows"), list),
+              str(fert)[:220])
+        if len(fw) == 2 and fert.get("ovulation"):
+            check("易孕窗口 = 排卵日后 1 天结束 / 排卵日前 5 天开始",
+                  (dt.date.fromisoformat(fw[1]) - dt.date.fromisoformat(fert["ovulation"])).days == 1
+                  and (dt.date.fromisoformat(fert["ovulation"]) - dt.date.fromisoformat(fw[0])).days == 5,
+                  "窗口=%s 排卵=%s" % (fw, fert.get("ovulation")))
+        check("免责话术在位（不可用于避孕）",
+              "避孕" in ((pred2 or {}).get("fertility_note") or ""),
+              str((pred2 or {}).get("fertility_note"))[:140])
+
+        st, pred_m = call("GET", "/api/cycle/prediction?person_id=%d" % male["id"])
+        check("没有经期记录的人：预测不报错、易孕期为空",
+              st == 200 and (pred_m or {}).get("count") == 0
+              and (pred_m or {}).get("fertility") is None, str(pred_m)[:160])
+
         # --- 三人场合：一个事件关联多人 ---
         st, ev_multi = call("POST", "/api/events", {
             "person_id": p["id"], "type_key": "text", "event_date": today.isoformat(),
@@ -533,6 +604,27 @@ def main() -> int:
               and (not anni or (anni[0].get("days_since") is not None
                                 and anni[0].get("days_to_next") is not None)),
               str(anni)[:160])
+
+        st, tcard_pass = call("GET", "/api/today?person_id=%d" % p["id"])
+        ent = ((tcard_pass or {}).get("persons") or [{}])[0]
+        check("今天卡片的人物行同时给出「生日的明确写法 + 还有几天 + 满几岁」",
+              st == 200 and ent.get("birthday_text") == "1990-01-01"
+              and ent.get("birthday_next") == "2027-01-01"
+              and ent.get("birthday_days_left") is not None
+              and ent.get("birthday_lunar") is False
+              and ent.get("gender") == "female",
+              str(ent)[:220])
+
+        st, tcard_none = call("GET", "/api/today?person_id=%d" % male["id"])
+        ent_none = ((tcard_none or {}).get("persons") or [{}])[0]
+        check("没生日的人：生日字段为 null（不是报错、也不是别的倒计时）",
+              st == 200 and ent_none.get("birthday_text") is None
+              and ent_none.get("birthday_days_left") is None, str(ent_none)[:200])
+
+        st, tcard_male = call("GET", "/api/today?person_id=%d" % male["id"])
+        males = (tcard_male or {}).get("persons") or [{}]
+        check("男性人物行不带生理期预测（不出现无标签的「约 N 天后」）",
+              st == 200 and "cycle" not in males[0], str(males[0])[:200])
 
         # --- 扇出清理：删事件应带走明细 ---
         call("DELETE", "/api/events/%d" % e3["id"], expect=204)

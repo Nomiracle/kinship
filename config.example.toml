@@ -64,7 +64,9 @@ default_modules = []
 [[relation_types]]
 key = "partner"
 label = "伴侣"
-default_modules = ["outfit", "cycle", "interaction", "gift", "media", "health"]
+# ★ cycle（生理期）不写在这里：它还要看性别，由 [[modules]].requires_gender 自动加
+#   （见 config.Settings.default_modules_for）。写在这儿就会给男性伴侣也开一个。
+default_modules = ["outfit", "interaction", "gift", "media", "health"]
 
 [[relation_types]]
 key = "family"
@@ -93,7 +95,9 @@ default_modules = ["interaction"]
 key = "cycle"
 label = "生理期"
 sensitivity = "sensitive"     # 默认打码，需二次口令展开
-requires_relation = ["partner"]
+requires_relation = ["partner"]   # 满足这些关系 + 下面的性别才「自动开」
+requires_gender = ["female"]      # 男性：模块不展示、也开不了（PUT 会忽略）
+                                  # 性别为空（未知）：不自动开，但允许手动开
 
 [[modules]]
 key = "outfit"

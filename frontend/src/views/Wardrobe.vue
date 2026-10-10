@@ -3,7 +3,7 @@
     <!-- 顶栏：显示谁 + 去重入口 -->
     <div class="card">
       <div class="row">
-        <span class="muted">显示：{{ store.scopeLabel }}（换人在首页）</span>
+        <span class="muted">显示：{{ scopeLabelText }}（换人在首页）</span>
         <span class="muted">共 {{ items.length }} 件</span>
       </div>
       <div class="chips" style="margin-top: 8px">
@@ -177,11 +177,24 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
+import { resolveScopedPerson } from '../lib/scope'
 
 const store = useArchiveStore()
+const route = useRoute()
+// 衣橱实际显示谁：优先 URL ?person（从个人页点进来），否则跟随全局；不写回全局。
+const effectivePersonId = computed(() =>
+  resolveScopedPerson(route.query.person, store.currentPersonId)
+)
+const scopeLabelText = computed(() => {
+  const id = effectivePersonId.value
+  if (!id) return '全部'
+  const p = store.persons.find((x) => x.id === id)
+  return p ? store.displayName(p) : '全部'
+})
 const items = ref([])
 const dupGroups = ref([])
 const category = ref('')
@@ -232,7 +245,7 @@ const mergeCandidates = computed(() => {
 })
 
 async function load() {
-  const personId = store.currentPersonId || undefined
+  const personId = effectivePersonId.value || undefined
   // 并发：两件事互不依赖，慢链路上少一个往返
   const [res, dup] = await Promise.all([
     api.wardrobeItems({
@@ -325,13 +338,13 @@ async function create() {
     showToast('先填名称')
     return
   }
-  if (!store.currentPersonId) {
+  if (!effectivePersonId.value) {
     showToast('先在首页选一个人（单品要挂在人下面）')
     return
   }
   try {
     await api.createWardrobeItem({
-      person_id: store.currentPersonId,
+      person_id: effectivePersonId.value,
       category: nCategory.value,
       name: nName.value.trim(),
       color: nColor.value || null,
@@ -360,10 +373,7 @@ async function upload(file) {
   }
 }
 
-watch(
-  () => store.currentPersonId,
-  () => load()
-)
+watch(effectivePersonId, () => load())
 
 onMounted(async () => {
   await store.ensureLoaded()
