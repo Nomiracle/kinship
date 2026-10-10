@@ -1,0 +1,206 @@
+# ============================================================
+# Kinship Archive — 应用配置示例
+#
+# 复制到仓库之外（本方案默认 ../deploy/config.toml）再改。
+# ★ 这里放「应用的配置」，不放「人的数据」。
+#   人的数据一律在数据库里，由页面维护。
+# ============================================================
+
+app_title = "Kinship Archive"
+locale = "zh-CN"
+timezone = "Asia/Shanghai"
+
+# 服装判重同义词表：每组的第一个是「规范写法」，去重时把组内其它写法折到它。
+# ★ 顶层键必须写在任何 [[表]] 之前，否则会被 TOML 归到上一个表里。
+wardrobe_synonyms = [
+  ["白色鞋", "小白鞋", "白鞋"],
+  ["阔腿裤", "阔腿长裤"],
+]
+
+[server]
+host = "127.0.0.1"      # 只绑本机/局域网，不要写 0.0.0.0 暴露到公网
+port = 8787
+# 页面口令从环境变量 ARCHIVE_TOKEN 读（放 deploy/.env），不要写在这里
+
+[database]
+host = "127.0.0.1"
+port = 3306
+name = "kinship_archive"
+user = "archive_app"
+# password 走环境变量 ARCHIVE_DB_PASSWORD
+charset = "utf8mb4"
+# 中文全文检索：ngram_token_size 默认 2，意味着「单字」查询检索不到，
+# 后端对 <=2 字的查询自动回退 LIKE。改这里必须同步改服务器 my.cnf。
+ngram_token_size = 2
+
+[media]
+# 相对 deploy 根目录
+dir = "media"
+max_upload_mb = 25
+thumbnail_max_px = 800
+# 上传后是否保留原图（true 建议开启：缩略图糊了还能回原图）
+keep_original = true
+
+[search]
+# 查询词长度 <= 此值时走 LIKE 回退（ngram 的固有限制）
+like_fallback_max_chars = 2
+
+[reminder]
+# 每日摘要
+daily_digest_time = "07:00"
+no_contact_days = 14          # 超过 N 天没记录联系就提醒
+upcoming_days = 10            # 未来 N 天内的特殊日子纳入摘要
+cycle_window_margin_days = 3  # 生理期预测窗口 ±N 天（辅助提醒，非医学用途）
+todo_backlog_threshold = 5    # 待办积压超过 N 条就提醒
+
+# ------------------------------------------------------------
+# 关系类型：决定 UI 文案与「默认开启哪些模块」
+# ------------------------------------------------------------
+[[relation_types]]
+key = "self"
+label = "我"
+default_modules = []
+
+[[relation_types]]
+key = "partner"
+label = "伴侣"
+default_modules = ["outfit", "cycle", "interaction", "gift", "media", "health"]
+
+[[relation_types]]
+key = "family"
+label = "家人"
+default_modules = ["interaction", "gift", "media", "health"]
+
+[[relation_types]]
+key = "friend"
+label = "朋友"
+default_modules = ["interaction", "media"]
+
+[[relation_types]]
+key = "acquaintance"
+label = "间接认识"
+default_modules = ["interaction", "media"]
+
+[[relation_types]]
+key = "colleague"
+label = "同事"
+default_modules = ["interaction"]
+
+# ------------------------------------------------------------
+# 功能模块：person_modules 里的开关取这里的 key
+# ------------------------------------------------------------
+[[modules]]
+key = "cycle"
+label = "生理期"
+sensitivity = "sensitive"     # 默认打码，需二次口令展开
+requires_relation = ["partner"]
+
+[[modules]]
+key = "outfit"
+label = "服装"
+
+[[modules]]
+key = "health"
+label = "健康"
+sensitivity = "sensitive"
+
+[[modules]]
+key = "interaction"
+label = "相处 / 见面"
+
+[[modules]]
+key = "gift"
+label = "礼物往来"
+
+[[modules]]
+key = "media"
+label = "图片"
+
+[[modules]]
+key = "contact"
+label = "联系记录"
+
+# ------------------------------------------------------------
+# 服装单品类别：slot 决定它在穿搭里排在哪个位置（上身/下身/鞋/配饰…）
+# 去重的唯一键 = 人 + 类别 + 名称 + 颜色，类别乱填会直接影响去重效果
+# ------------------------------------------------------------
+[[wardrobe_categories]]
+key = "top"
+label = "上衣"
+slot = "top"
+
+[[wardrobe_categories]]
+key = "bottom"
+label = "下装"
+slot = "bottom"
+
+[[wardrobe_categories]]
+key = "outer"
+label = "外套/马甲"
+slot = "outer"
+
+[[wardrobe_categories]]
+key = "dress"
+label = "裙装"
+slot = "dress"
+
+[[wardrobe_categories]]
+key = "shoes"
+label = "鞋"
+slot = "shoes"
+
+[[wardrobe_categories]]
+key = "accessory"
+label = "配饰"
+slot = "accessory"
+
+[[wardrobe_categories]]
+key = "bag"
+label = "包"
+slot = "bag"
+
+[[wardrobe_categories]]
+key = "other"
+label = "其他"
+slot = "other"
+
+# ------------------------------------------------------------
+# 属性分类：attributes 表里 category 的取值（「她喜欢什么」这类 KV）
+# ------------------------------------------------------------
+[[attribute_categories]]
+key = "like"
+label = "喜欢"
+
+[[attribute_categories]]
+key = "avoid"
+label = "忌口 / 少吃"
+
+[[attribute_categories]]
+key = "drink"
+label = "常喝"
+sensitivity = "normal"
+
+[[attribute_categories]]
+key = "dislike"
+label = "不喝 / 不爱"
+
+[[attribute_categories]]
+key = "hobby"
+label = "爱好"
+
+[[attribute_categories]]
+key = "work"
+label = "工作"
+
+[[attribute_categories]]
+key = "taboo"
+label = "雷区"
+sensitivity = "sensitive"
+
+[[attribute_categories]]
+key = "observe"
+label = "观察"
+
+[[attribute_categories]]
+key = "experience"
+label = "相处经验"

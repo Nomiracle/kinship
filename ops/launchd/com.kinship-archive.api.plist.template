@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kinship Archive — launchd 模板（uvicorn 常驻）
+
+  ★ 模板化原因：本仓库公开，不能出现本机绝对路径。
+    ops/install-launchd.sh 会把 __HOME__ / __APP_DIR__ / __DEPLOY_DIR__ / __PORT__ 渲染后
+    写到 ~/Library/LaunchAgents/ 下，仓库里永远是占位符。
+
+  加载：  ops/install-launchd.sh && launchctl load ~/Library/LaunchAgents/com.kinship-archive.api.plist
+  卸载：  launchctl unload ~/Library/LaunchAgents/com.kinship-archive.api.plist
+
+  ⚠️ 先读 README 的「运行方式」：macOS 的 TCC 会阻止 launchd 进程访问 ~/Desktop /
+  ~/Documents / ~/Downloads。仓库若在这些目录下，本 plist 会让进程**卡死在启动阶段**
+  （无日志）。此时改用 ops/serve.sh + 定时任务守护，或给解释器授予完全磁盘访问权限。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kinship-archive.api</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__APP_DIR__/.venv/bin/uvicorn</string>
+    <string>backend.main:app</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>__PORT__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__APP_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ARCHIVE_DEPLOY_DIR</key>
+    <string>__DEPLOY_DIR__</string>
+    <key>ARCHIVE_CONFIG</key>
+    <string>__DEPLOY_DIR__/config.toml</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__DEPLOY_DIR__/logs/api.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__DEPLOY_DIR__/logs/api.error.log</string>
+</dict>
+</plist>

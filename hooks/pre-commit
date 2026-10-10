@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Kinship Archive — pre-commit 隐私守卫
+#
+# 设计要点：钩子本身通用、可公开；真正的「敏感词表」放在仓库外，
+# 通过 $ARCHIVE_DENYLIST 指向（默认 ~/.config/kinship-archive/denylist.txt）。
+# 词表不存在时该项检查静默跳过 —— 所以在 CI / 别人的机器上不会误报。
+#
+# 安装：bash hooks/install.sh
+set -uo pipefail
+
+fail=0
+report() { printf '\n\033[31m✗ pre-commit 已阻止提交：%s\033[0m\n' "$1"; fail=1; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# ---------- 第 1 道：路径硬拦（部署目录 / 数据库 / 密钥）----------
+while IFS= read -r f; do
+  case "$f" in
+    deploy/*|data/*|media/*|uploads/*|backups/*|logs/*)
+      report "路径属于隐私/运行时目录：$f" ;;
+    .env|.env.*|*/.env|*/.env.*|config.toml|*/config.toml|denylist.txt|*denylist.txt|.my.cnf)
+      report "疑似密钥或本地配置：$f" ;;
+    *.db|*.sqlite|*.sqlite3|*.dump|*.sql.gz)
+      report "疑似数据库文件：$f" ;;
+    *.jpg|*.jpeg|*.JPG|*.png|*.PNG|*.heic|*.HEIC|*.webp|*.mov|*.mp4)
+      # 前端/文档/测试合成素材例外
+      case "$f" in
+        frontend/public/*|frontend/src/assets/*|docs/*|tests/fixtures/generated/*) ;;
+        *) report "疑似私人图片/视频：$f" ;;
+      esac ;;
+  esac
+done <<< "$staged"
+
+# ---------- 第 2 道：内容扫描（敏感词表在仓库外）----------
+denylist="${ARCHIVE_DENYLIST:-$HOME/.config/kinship-archive/denylist.txt}"
+if [ -f "$denylist" ]; then
+  # 逐词扫描已暂存的「新增行」，忽略二进制
+  while IFS= read -r kw; do
+    [ -z "$kw" ] && continue
+    case "$kw" in \#*) continue ;; esac          # 允许 # 注释
+    hits=$(git diff --cached -U0 --no-color -- . \
+             | grep -a '^+' | grep -av '^+++' \
+             | grep -aF -- "$kw" || true)
+    if [ -n "$hits" ]; then
+      report "明文命中敏感词「${kw}」（词表：${denylist}）"
+    fi
+  done < "$denylist"
+else
+  echo "· 未找到敏感词表（${denylist}），跳过内容扫描"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  cat <<'EOF'
+
+提示：
+  · 部署数据请放 ../deploy/（本方案中它在 git 仓库之外）
+  · 确有必要的例外：git commit --no-verify（请先确认自己知道在做什么）
+EOF
+  exit 1
+fi
+
+exit 0

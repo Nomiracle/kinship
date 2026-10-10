@@ -1,0 +1,14 @@
+# Runtime deps (Python 3.9+)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+alembic>=1.13
+pymysql>=1.1
+python-multipart>=0.0.9
+tomli>=2.0          # 系统 Python 3.9 没有 tomllib
+pydantic>=2.7
+
+# Test / lint
+pytest>=8.0
+httpx>=0.27
+ruff>=0.6

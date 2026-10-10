@@ -1,0 +1,63 @@
+# ============================================================
+# Kinship Archive — 隐私红线
+# 这个仓库是公开的。以下内容永远不要提交。
+# ============================================================
+
+# ---- 密钥与本地配置 ----
+.env
+.env.*
+*.local.*
+config.toml
+denylist.txt
+.my.cnf
+
+# ---- 部署运行时（本方案中位于仓库之外的 ../deploy/）----
+deploy/
+data/
+media/
+uploads/
+backups/
+logs/
+
+# ---- 数据库 ----
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+
+# ---- 素材：一律不进仓库（前端自带素材见下方例外）----
+*.jpg
+*.jpeg
+*.JPG
+*.png
+*.PNG
+*.heic
+*.HEIC
+*.webp
+*.mov
+*.mp4
+
+# 前端/文档所需的自有素材例外放行
+!frontend/public/**/*.png
+!frontend/public/**/*.svg
+!frontend/src/assets/**/*.png
+!frontend/src/assets/**/*.svg
+!docs/**/*.png
+!docs/**/*.svg
+
+# 测试合成素材是构建产物，现场生成
+tests/fixtures/generated/
+
+# ---- 构建产物 ----
+dist/
+build/
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+coverage/
+.DS_Store
