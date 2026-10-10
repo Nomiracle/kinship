@@ -31,6 +31,12 @@ test('router 保留全部既有 URL（不删不改）', () => {
 test('router 新增 /people 且录入路由隐藏底部 tabbar', () => {
   assert.ok(router.includes("path: '/people'"))
   assert.ok(/path: '\/new'[\s\S]*hideTabbar: true/.test(router), '/new 应 hideTabbar')
+  // ★ 记穿搭页也是「录入页」：必须带 hideTabbar —— App 的「＋记录」FAB 与 tabbar 都按这个标记
+  //   判定是否显示（漏了它，FAB 会压在那一页的「保存」上，点保存变成跳回记录页）
+  assert.ok(
+    /path: '\/wardrobe\/new'[^}]*hideTabbar: true/.test(router),
+    '/wardrobe/new（记穿搭）应 hideTabbar'
+  )
   assert.ok(/path: '\/person\/:id'[\s\S]*back: true/.test(router), '个人页应有返回')
 })
 
@@ -65,7 +71,20 @@ test('App 录入路由与「正在编辑」时隐藏 tabbar 与「＋记录」',
     app,
     /showTabbar = computed\(\(\) => !route\.meta\?\.hideTabbar && !store\.editingRecord\)/
   )
-  assert.match(app, /showFab = computed\(\(\) => route\.name !== 'new' && !store\.editingRecord\)/)
+  // 「＋记录」与 tabbar 同一口径：一律按 meta.hideTabbar（所有录入/编辑路由）判定。
+  // 只排除 route.name === 'new' 会漏掉 /wardrobe/new —— FAB 会盖住那页的「保存」
+  // （手机视口实测重叠），点保存变成跳回记录页、选的衣物一条没记上。
+  assert.match(
+    app,
+    /showFab = computed\(\(\) => !route\.meta\?\.hideTabbar && !store\.editingRecord\)/
+  )
+  assert.ok(
+    !/showFab = computed\(\(\) => route\.name !== 'new'/.test(app),
+    '「＋记录」不能只按 /new 排除，要覆盖所有 hideTabbar 的录入页'
+  )
+  // 录入页要留出底部安全区，最后一个控件不被 Home indicator / 悬浮元素压住
+  assert.match(app, /\.page:not\(\.has-tabbar\)/)
+  assert.match(app, /padding-bottom: calc\(12px \+ var\(--safe-bottom\)\)/)
 })
 
 test('App 含全局搜索入口与首页设置齿轮', () => {

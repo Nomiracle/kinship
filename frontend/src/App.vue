@@ -104,7 +104,11 @@ const showSearch = computed(() => route.name !== 'search')
 const showGear = computed(() => route.name === 'dashboard')
 // 编辑记录弹层打开时也隐藏 tabbar / FAB（避免弹层里叠一层导航）
 const showTabbar = computed(() => !route.meta?.hideTabbar && !store.editingRecord)
-const showFab = computed(() => route.name !== 'new' && !store.editingRecord)
+// ★ 口径必须与 tabbar 一致：**所有**录入/编辑路由（meta.hideTabbar = /new、/wardrobe/new）都不显示。
+//   以前只排除 route.name === 'new'，漏掉了「记穿搭」页 —— 这个 fixed 的悬浮按钮（z-index 30）
+//   会压在那一页最底部的「保存」上（手机视口实测两者重叠），点在它上面就变成跳去记录页：
+//   用户看到「点了保存 → 回到记录页 → 刚选的衣物一条都没记上」。录入页不提供这个入口。
+const showFab = computed(() => !route.meta?.hideTabbar && !store.editingRecord)
 const tabKey = computed(() => activeTabKey(route))
 const segKey = computed(() => activeSegmentKey(route))
 
@@ -343,6 +347,10 @@ body {
 /* 有底部 tabbar 时给足底部留白：让最后一个条目不被 tabbar / 悬浮「＋记录」遮住 */
 .page.has-tabbar {
   padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 72px);
+}
+/* 没有 tabbar 的页面（录入页）也留出安全区：最后一个控件（如「保存」）不该压在 Home indicator 上 */
+.page:not(.has-tabbar) {
+  padding-bottom: calc(12px + var(--safe-bottom));
 }
 .tabbar {
   position: fixed;
