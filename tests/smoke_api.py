@@ -484,6 +484,14 @@ def main() -> int:
               st == 201 and any(r["id"] == rel["id"] and r["to_name"] == PREFIX + "她的朋友"
                                 for r in (rels or [])),
               "status=%s %s" % (st2, str(rels)[:160]))
+        # 同一组「谁 —称谓→ 谁」有唯一键：重复提交必须给人话 409，不能漏成 500
+        st_dup, dup = call("POST", "/api/relations", {
+            "from_person_id": p["id"], "to_person_id": her_friend["id"],
+            "label": PREFIX + "朋友",
+        }, expect=409)
+        check("重复的关系边返回 409（不是 500）",
+              st_dup == 409 and bool((dup or {}).get("detail")),
+              "status=%s %s" % (st_dup, str(dup)[:160]))
 
         # --- 服装（彻底版）：单品唯一化 + 穿搭引用 + 去重 ---
         st, it1 = call("POST", "/api/wardrobe/items", {

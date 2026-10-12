@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -302,9 +303,25 @@ def create_relation(payload: RelationIn, session: Session = Depends(get_session)
     for pid in (payload.from_person_id, payload.to_person_id):
         if not session.get(Person, pid):
             raise HTTPException(404, "人物 %s 不存在" % pid)
+    # 同一组「谁 —称谓→ 谁」有唯一键（uq_relation_edge）。先查一遍给出人话 409：
+    # 直接 INSERT 撞唯一键会抛 IntegrityError → 500（实测过），前端只能看到「服务器错误」。
+    dup = session.scalar(select(PersonRelation).where(
+        PersonRelation.from_person_id == payload.from_person_id,
+        PersonRelation.to_person_id == payload.to_person_id,
+        PersonRelation.label == payload.label,
+    ))
+    if dup:
+        raise HTTPException(409, detail={
+            "message": "这条关系边已经有了（同一个人 + 同一个称谓）", "existing_id": dup.id,
+        })
     rel = PersonRelation(**payload.model_dump())
     session.add(rel)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # 并发下两个请求可能同时过了上面的查询 —— 兜底也报 409，别漏成 500
+        session.rollback()
+        raise HTTPException(409, detail={"message": "这条关系边已经有了（同一个人 + 同一个称谓）"})
     write_audit(session, "person_relation", rel.id, "create")
     return {"id": rel.id}
 
