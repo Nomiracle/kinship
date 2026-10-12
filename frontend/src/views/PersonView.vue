@@ -189,14 +189,17 @@
       <p v-else class="muted">还没有关系记录，点「管理」添加。</p>
     </div>
 
-    <!-- 最近记录 -->
+    <!-- 最近记录：按日合并（同一天的多条只在日头体现，点日头展开看细节） -->
     <div class="card">
       <h3>最近记录</h3>
-      <div class="row" v-for="e in events" :key="e.id">
-        <span><van-tag plain>{{ typeLabel(e.type_key) }}</van-tag> {{ e.title || (e.body || '').slice(0, 16) }}</span>
-        <span class="muted">{{ e.event_date }}</span>
-      </div>
-      <van-empty v-if="!events.length" description="还没有记录" />
+      <EventDayList
+        :items="events"
+        compact
+        bare
+        hide-person
+        :editable="false"
+        :label-of="typeLabel"
+      />
     </div>
 
     <!-- 服装 / 图片 -->
@@ -292,6 +295,7 @@ import { useArchiveStore } from '../store'
 import { scopeQuery } from '../lib/scope'
 import { birthdayLine } from '../lib/birthday'
 import { previewUrls } from '../lib/media-preview'
+import EventDayList from '../components/EventDayList.vue'
 
 const store = useArchiveStore()
 const route = useRoute()

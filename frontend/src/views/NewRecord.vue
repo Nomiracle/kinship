@@ -67,7 +67,7 @@
     <div class="card">
       <h3>哪一天</h3>
       <div class="chips" style="margin-bottom: 8px">
-        <van-button size="small" :type="isToday ? 'primary' : 'default'" @click="setDate(todayStr)">
+        <van-button size="small" :type="isToday ? 'primary' : 'default'" @click="setToday">
           今天
         </van-button>
         <van-button size="small" :type="isYesterday ? 'primary' : 'default'" @click="setDate(shift(-1))">
@@ -77,7 +77,13 @@
           前天
         </van-button>
       </div>
-      <input v-model="eventDate" type="date" class="picker" />
+      <!-- 精确到秒：原生 datetime-local（step=1）。只填日期 = 只记到日，
+           界面不会显示 00:00，也不会假装那是凌晨记的。 -->
+      <input v-model="eventWhen" type="datetime-local" step="1" class="picker" />
+      <div class="chips" style="margin-top: 6px">
+        <van-tag type="default" @click="setTime(nowLocalTime())">此刻</van-tag>
+        <van-tag v-if="eventTime" plain @click="setTime('')">只记到日（清掉时间）</van-tag>
+      </div>
       <!-- 跨零点防错：不是今天就明确回显「哪一天 + 星期几」，避免又记错日期 -->
       <p class="muted" style="margin: 8px 0 0" :class="{ warn: !isToday }">
         将记到：<strong>{{ dateHuman }}</strong>
@@ -215,6 +221,14 @@ import { useArchiveStore } from '../store'
 import { availableEventTypes, reconcileEventType } from '../lib/modules'
 import { normalizePersonId } from '../lib/scope'
 import { eventThumb, itemThumb, pickKey, pickLabel, toOutfitRefs } from '../lib/outfit-pick'
+import {
+  dayOf,
+  fmtTime,
+  nowLocalTime,
+  normalizeTime,
+  splitLocal,
+  toLocalInput,
+} from '../lib/event-day'
 import OutfitForm from '../components/OutfitForm.vue'
 
 const store = useArchiveStore()
@@ -315,7 +329,7 @@ function onPickConfirm(payload) {
   )
 }
 
-const eventDate = ref('')
+const eventWhen = ref('')
 const title = ref('')
 const body = ref('')
 const tags = ref('')
@@ -335,20 +349,35 @@ function shift(days) {
   d.setDate(d.getDate() + days)
   return d.toLocaleDateString('sv-SE')
 }
+// ---- 日期 / 时间（一个 datetime-local 输入，拆成日期与时刻）----
+const eventDay = computed(() => splitLocal(eventWhen.value).date)
+const eventTime = computed(() => splitLocal(eventWhen.value).time)
+// 「今天」默认带上此刻（记的就是现在发生的事）；昨天/前天只到日、不带时间
+function setToday() {
+  eventWhen.value = toLocalInput(todayStr, nowLocalTime())
+}
 function setDate(v) {
-  eventDate.value = v
+  eventWhen.value = toLocalInput(v, '')
+}
+function setTime(v) {
+  eventWhen.value = toLocalInput(eventDay.value, v)
+}
+// 保存成功后把时间刷新到此刻：否则连记两条会都用同一条旧时刻
+function refreshTimeIfToday() {
+  if (isToday.value) eventWhen.value = toLocalInput(todayStr, nowLocalTime())
 }
 
-const isToday = computed(() => eventDate.value === todayStr)
-const isYesterday = computed(() => eventDate.value === shift(-1))
-const isBeforeYesterday = computed(() => eventDate.value === shift(-2))
+const isToday = computed(() => eventDay.value === todayStr)
+const isYesterday = computed(() => eventDay.value === shift(-1))
+const isBeforeYesterday = computed(() => eventDay.value === shift(-2))
 
 const dateHuman = computed(() => {
-  if (!eventDate.value) return ''
-  const d = new Date(eventDate.value + 'T00:00:00')
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+  if (!eventDay.value) return ''
+  const d = new Date(eventDay.value + 'T00:00:00')
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
     d.getDate()
   ).padStart(2, '0')} ${WEEK[d.getDay()]}`
+  return eventTime.value ? `${day} ${eventTime.value.slice(0, 5)}` : day
 })
 
 const titleLabel = computed(
@@ -363,8 +392,11 @@ const titlePlaceholder = computed(
     }[type.value] || '')
 )
 
-function fmt(s) {
-  return s ? s.slice(5) : ''
+function fmt(r) {
+  // 只记到日的记录不显示时间；记了时刻才显示 '10-12 14:03'
+  const d = dayOf(r.event_date).slice(5)
+  const t = fmtTime(r)
+  return d ? (t ? `${d} ${t}` : d) : ''
 }
 function typeLabel(key) {
   const t = store.eventTypes.find((x) => x.key === key)
@@ -379,7 +411,8 @@ async function uploadPickedFiles(createdId) {
       await api.uploadMedia(item.file || item, {
         person_id: Number(personId.value),
         event_id: createdId,
-        captured_on: eventDate.value,
+        // captured_on 是 DATE 列：取日期部分
+        captured_on: eventDay.value,
       })
       ok += 1
     } catch (e) {
@@ -408,7 +441,7 @@ async function submit() {
     showToast('先选一个人')
     return
   }
-  if (!eventDate.value) {
+  if (!eventDay.value) {
     showToast('先选日期')
     return
   }
@@ -422,7 +455,7 @@ async function submit() {
         cancelButtonText: '改回今天',
       })
     } catch {
-      setDate(todayStr)
+      setToday()
       return
     }
   }
@@ -444,10 +477,11 @@ async function submit() {
   }
   saving.value = true
   try {
+    const when = { event_date: eventDay.value, event_time: normalizeTime(eventTime.value) }
     const payload = {
       person_id: Number(personId.value),
       type_key: type.value,
-      event_date: eventDate.value,
+      ...when,
       title: title.value || null,
       body: body.value || null,
       tags: tags.value || null,
@@ -466,7 +500,7 @@ async function submit() {
       type.value === 'outfit'
         ? await api.createOutfit({
             person_id: Number(personId.value),
-            event_date: eventDate.value,
+            ...when,
             items: toOutfitRefs(picked.value),
             note: note.value || null,
             tags: tags.value || null,
@@ -484,6 +518,7 @@ async function submit() {
     else if (ok) showToast(`已记录${what}，含 ${ok} 张图片`)
     else showToast(`已记录${what}（图片未上传成功）`)
     resetContent()
+    refreshTimeIfToday()   // 连记两条时，第二条的时间要是「此刻」而不是上一条的旧时刻
     await loadRecent()
   } catch (e) {
     showToast(e.message || '保存失败')
@@ -499,7 +534,7 @@ async function loadRecent() {
 }
 
 onMounted(async () => {
-  eventDate.value = todayStr
+  eventWhen.value = toLocalInput(todayStr, nowLocalTime())
   // 硬刷新直接进本页时 persons 可能还没加载完 —— 先补一次再定人（旧版这里会空着）
   await store.ensureLoaded()
   // 三件事互不依赖 → 并发（慢链路上少两个往返）。

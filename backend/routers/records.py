@@ -7,7 +7,7 @@ period / meeting 做「结构化扇出」——写事件的同时落一条明细
 from __future__ import annotations
 
 import datetime as dt
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func, select
@@ -43,6 +43,8 @@ from ..schemas import (
     TodoIn,
     TodoOut,
     TodoPatch,
+    event_date_str,
+    event_time_str,
 )
 from ..services.audit import write_audit
 from ..services import media as media_svc
@@ -62,7 +64,10 @@ def _event_out(e: Event, names: dict, media: Optional[list] = None,
         "person_id": e.person_id,
         "person_name": names.get(e.person_id),
         "type_key": e.type_key,
-        "event_date": e.event_date,
+        # 日期仍是 'YYYY-MM-DD'（老前端照旧渲染），时刻走 event_time / event_at
+        "event_date": event_date_str(e.event_date),
+        "event_at": e.event_date,
+        "event_time": event_time_str(e.event_date),
         "title": e.title,
         "body": e.body,
         "tags": e.tags,
@@ -127,41 +132,70 @@ def list_events(
     # date（默认）= 按事件日期倒序（时间轴的「记录」语义）；created = 按写入时间倒序
     #   （记录页「刚记的」用：记到过去某天的记录也得出现在「刚记的」里，否则像没记上）
     order: str = Query("date", pattern="^(date|created)$"),
+    # day = 按日分组返回（时间轴用）。★ 被 limit 截断的那一天会补全取回，
+    #   否则第 201 条起会把同一天撕成两页，日头卡片看起来像丢了记录。
+    group: str = Query("flat", pattern="^(flat|day)$"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ):
-    stmt = select(Event)
+    conds = []
     if person_id:
-        stmt = stmt.where(Event.person_id == person_id)
+        conds.append(Event.person_id == person_id)
     if type_key:
-        stmt = stmt.where(Event.type_key == type_key)
+        conds.append(Event.type_key == type_key)
     if date_from:
-        stmt = stmt.where(Event.event_date >= date_from)
+        conds.append(Event.event_date >= date_from)
     if date_to:
-        stmt = stmt.where(Event.event_date <= date_to)
+        conds.append(Event.event_date <= date_to)
     if q:
         like = "%%%s%%" % q
-        stmt = stmt.where(Event.title.like(like) | Event.body.like(like) | Event.tags.like(like))
+        conds.append(Event.title.like(like) | Event.body.like(like) | Event.tags.like(like))
+    base = select(Event).where(*conds)
 
-    total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
     if order == "created":
-        stmt = stmt.order_by(desc(Event.created_at), desc(Event.id))
+        ordering = (desc(Event.created_at), desc(Event.id))
     else:
-        stmt = stmt.order_by(desc(Event.event_date), desc(Event.id))
-    rows = list(session.scalars(stmt.limit(limit).offset(offset)))
+        # 同一天内按时刻倒序；时间部分 00:00:00（= 只记到日）自然落在当天末尾。
+        # ★ 不包 DATE() 函数：包了就用不上索引，也没必要。
+        ordering = (desc(Event.event_date), desc(Event.id))
+    rows = list(session.scalars(base.order_by(*ordering).limit(limit).offset(offset)))
+
+    if group == "day" and rows:
+        last_day = rows[-1].event_day
+        day_begin = dt.datetime.combine(last_day, dt.time())
+        day_end = dt.datetime.combine(last_day + dt.timedelta(days=1), dt.time())
+        tail = list(session.scalars(
+            base.where(Event.event_date >= day_begin, Event.event_date < day_end)
+            .order_by(*ordering)
+        ))
+        seen_ids = {e.id for e in rows}
+        rows.extend([e for e in tail if e.id not in seen_ids])
+
     names = _names(session)
     mmedia = _media_map(session, [e.id for e in rows])
     mwears = _wear_map(session, rows)
-    return {"total": int(total), "limit": limit, "offset": offset,
-            "items": [_event_out(e, names, mmedia.get(e.id), mwears.get(e.id))
-                      for e in rows]}
+    items = [_event_out(e, names, mmedia.get(e.id), mwears.get(e.id)) for e in rows]
+    payload = {"total": int(total), "limit": limit, "offset": offset, "items": items}
+    if group == "day":
+        grouped: Dict[str, list] = {}
+        for it in items:
+            grouped.setdefault(it["event_date"], []).append(it)
+        payload["days"] = [
+            {"date": d, "count": len(v), "items": v} for d, v in grouped.items()
+        ]
+        # 补全后的 next_offset 直接是「已取回的行数」——分页游标仍然连续，不会跳记录
+        payload["next_offset"] = offset + len(rows)
+        payload["has_more"] = payload["next_offset"] < total
+    return payload
 
 
 @router.post("/events", response_model=EventOut, status_code=201)
 def create_event(payload: EventIn, session: Session = Depends(get_session)):
     data = payload.model_dump()
     extra = {k: data.pop(k) for k in ("overnight", "location", "hours")}
+    data.pop("event_time", None)   # 已合并进 event_date（见 schemas.EventAtMixin）
     person_ids = data.pop("person_ids", None)
     person_id = data.get("person_id")
     if person_id and not session.get(Person, person_id):
@@ -177,21 +211,21 @@ def create_event(payload: EventIn, session: Session = Depends(get_session)):
         for pid in set(person_ids):
             session.add(EventPerson(event_id=event.id, person_id=pid))
 
-    # 结构化扇出
+    # 结构化扇出（明细表按「日」走 —— event_day 就是 .date()，见 models.Event.event_day）
     if event.type_key == "period" and person_id:
         exists = session.scalar(
             select(CycleRecord).where(
-                CycleRecord.person_id == person_id, CycleRecord.start_date == event.event_date
+                CycleRecord.person_id == person_id, CycleRecord.start_date == event.event_day
             )
         )
         if not exists:
-            session.add(CycleRecord(person_id=person_id, start_date=event.event_date,
+            session.add(CycleRecord(person_id=person_id, start_date=event.event_day,
                                     note=event.title))
     if event.type_key == "meeting" and person_id:
         session.add(Interaction(
             event_id=event.id,
             person_id=person_id,
-            occurred_on=event.event_date,
+            occurred_on=event.event_day,
             location=extra.get("location"),
             overnight=bool(extra.get("overnight")),
             hours=extra.get("hours"),
@@ -220,7 +254,9 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
     data = payload.model_dump(exclude_unset=True)
     items = data.pop("items", None)
     extra = {k: data.pop(k) for k in ("location", "hours", "overnight") if k in data}
-    old_date = event.event_date
+    data.pop("event_time", None)   # 已合并进 event_date（见 schemas.EventAtMixin）
+    # ★ old_day 是「日」（date）：明细表的列都是 DATE，比较/回写都要用它
+    old_day = event.event_day
     for k, v in data.items():
         setattr(event, k, v)
 
@@ -259,11 +295,11 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
             rows = list(session.scalars(select(Interaction).where(
                 Interaction.event_id.is_(None),
                 Interaction.person_id == event.person_id,
-                Interaction.occurred_on == old_date,
+                Interaction.occurred_on == old_day,
             )))
         for row in rows:
             row.person_id = event.person_id
-            row.occurred_on = event.event_date
+            row.occurred_on = event.event_day
             row.note = event.title
             if "location" in extra:
                 row.location = extra["location"]
@@ -273,18 +309,18 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
                 row.hours = extra["hours"]
 
     # ---- 生理期：cycle_records 的唯一键是 (person_id, start_date) ----
-    if event.type_key == "period" and event.event_date != old_date:
+    if event.type_key == "period" and event.event_day != old_day:
         clash = session.scalar(select(CycleRecord).where(
             CycleRecord.person_id == event.person_id,
-            CycleRecord.start_date == event.event_date,
+            CycleRecord.start_date == event.event_day,
         ))
         if clash:
             raise HTTPException(409, "目标日期已经有一条生理期记录，不能重复")
         for row in session.scalars(select(CycleRecord).where(
             CycleRecord.person_id == event.person_id,
-            CycleRecord.start_date == old_date,
+            CycleRecord.start_date == old_day,
         )):
-            row.start_date = event.event_date
+            row.start_date = event.event_day
 
     write_audit(session, "event", event_id, "update")
     session.flush()
@@ -304,7 +340,7 @@ def delete_event(event_id: int, session: Session = Depends(get_session)):
         for row in session.scalars(
             select(CycleRecord).where(
                 CycleRecord.person_id == event.person_id,
-                CycleRecord.start_date == event.event_date,
+                CycleRecord.start_date == event.event_day,
             )
         ):
             session.delete(row)
@@ -314,7 +350,7 @@ def delete_event(event_id: int, session: Session = Depends(get_session)):
         for row in session.scalars(select(Interaction).where(
             Interaction.event_id.is_(None),
             Interaction.person_id == event.person_id,
-            Interaction.occurred_on == event.event_date,
+            Interaction.occurred_on == event.event_day,
         )):
             session.delete(row)
     # 穿搭：先取受影响的单品（删完就查不到了），删掉引用后重算「首次/最近穿着」

@@ -36,7 +36,7 @@
       <h3>刚记的</h3>
       <div class="row">
         <span>
-          <van-tag plain>{{ lastSaved.event_date }}</van-tag>
+          <van-tag plain>{{ fmtWhen(lastSaved) }}</van-tag>
           {{ lastSaved.title || '（没有关联单品）' }}
         </span>
         <span class="muted">{{ (lastSaved.items || []).length }} 件单品</span>
@@ -56,6 +56,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { normalizePersonId, scopeQuery } from '../lib/scope'
+import { fmtWhen } from '../lib/event-day'
 import OutfitForm from '../components/OutfitForm.vue'
 
 const store = useArchiveStore()

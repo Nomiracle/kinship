@@ -743,6 +743,113 @@ def main() -> int:
         check("男性人物行不带生理期预测（不出现无标签的「约 N 天后」）",
               st == 200 and "cycle" not in males[0], str(males[0])[:200])
 
+        # --- 事件时刻精确到秒（DATETIME）+ 时间轴按日分组 ---
+        # 原来 event_date 是 DATE（只到日），同一天发生的事分不出先后；
+        # ★ 口径：时间部分 00:00:00 = 「只记到日」，出参 event_time 为 None。
+        st, e_sec = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "text", "event_date": today.isoformat(),
+            "event_time": "14:03:21", "title": PREFIX + "带时刻",
+        })
+        check("写入：日期 + 独立时刻字段 → 读回秒级 event_time/event_at",
+              st == 201 and e_sec.get("event_time") == "14:03:21"
+              and (e_sec.get("event_at") or "").endswith("14:03:21"), str(e_sec)[:220])
+        created_events.append(e_sec["id"])
+        check("写入：event_date 仍是 'YYYY-MM-DD'（老前端/老断言兼容）",
+              e_sec.get("event_date") == today.isoformat(), str(e_sec.get("event_date")))
+
+        st, e_iso = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "text",
+            "event_date": today.isoformat() + "T09:15:00", "title": PREFIX + "ISO串",
+        })
+        check("写入：ISO 时刻串（T 分隔）也能精确到秒",
+              st == 201 and e_iso.get("event_time") == "09:15:00", str(e_iso)[:220])
+        created_events.append(e_iso["id"])
+
+        st, patched = call("PATCH", "/api/events/%d" % e_sec["id"], {
+            "event_date": today.isoformat(), "event_time": "23:59:59"})
+        check("编辑：把时刻改到 23:59:59（日期不动）",
+              st == 200 and patched.get("event_time") == "23:59:59", str(patched)[:220])
+        st, cleared = call("PATCH", "/api/events/%d" % e_sec["id"],
+                           {"event_date": today.isoformat()})
+        check("编辑：只给日期 → 回到「只记到日」（event_time=None）",
+              st == 200 and cleared.get("event_time") is None, str(cleared)[:220])
+        st, _ = call("PATCH", "/api/events/%d" % e_sec["id"], {"event_time": "14:00"}, expect=422)
+        check("编辑：只给时刻不给日期 → 422（不静默猜日期）", st == 422, "status=%s" % st)
+
+        st, day_all = call("GET", "/api/events?person_id=%d&group=day&limit=200" % p["id"])
+        day_list = (day_all or {}).get("days") or []
+        flat = (day_all or {}).get("items") or []
+        dates = [d["date"] for d in day_list]
+        check("group=day：days 覆盖全部 items、按日期倒序、组内条数正确",
+              st == 200 and dates == sorted(dates, reverse=True)
+              and sum(d["count"] for d in day_list) == len(flat)
+              and all(d["count"] == len(d["items"]) for d in day_list), str(day_all)[:220])
+
+        st, pad = call("GET", "/api/events?person_id=%d&group=day&limit=1" % p["id"])
+        pad_items = (pad or {}).get("items") or []
+        pad_day = ((pad or {}).get("days") or [{}])[0].get("date")
+        check("group=day：被 limit 截断的那一天补全取回（同一天不被撕成两页）",
+              st == 200 and len(pad_items) >= 2
+              and all(i["event_date"] == pad_day for i in pad_items), str(pad)[:220])
+        check("group=day：next_offset/has_more 用补全后的条数（分页不跳记录）",
+              pad.get("next_offset") == len(pad_items)
+              and pad.get("has_more") == (pad.get("total", 0) > len(pad_items)),
+              "next=%s has_more=%s total=%s shown=%s"
+              % (pad.get("next_offset"), pad.get("has_more"), pad.get("total"), len(pad_items)))
+        times = [(x.get("event_time") or "") for x in pad_items]
+        timed = [t for t in times if t]
+        check("group=day：同一天内有时刻的按时刻倒序、无时刻的落末尾",
+              times[len(timed):] == [""] * (len(times) - len(timed))
+              and timed == sorted(timed, reverse=True), str(times))
+
+        # --- 扇出仍按「日」：明细表是 DATE 列 ---
+        per_day = (today - dt.timedelta(days=100)).isoformat()
+        st, e_per = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "period", "event_date": per_day,
+            "event_time": "08:30:00", "title": PREFIX + "带时刻经期",
+        })
+        created_events.append(e_per["id"])
+        st, cyc2 = call("GET", "/api/cycle?person_id=%d" % p["id"])
+        check("扇出：带时刻的生理期事件 → cycle_records.start_date 取「日」",
+              st == 200 and any(c.get("start_date") == per_day for c in (cyc2 or [])),
+              str(cyc2)[:220])
+
+        meet_day = (today - dt.timedelta(days=7)).isoformat()
+        st, e_meet = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "meeting", "event_date": meet_day,
+            "event_time": "19:00:00", "title": PREFIX + "带时刻见面",
+            "location": PREFIX + "测试地",
+        })
+        created_events.append(e_meet["id"])
+        st, inter3 = call("GET", "/api/interactions?person_id=%d" % p["id"])
+        check("扇出：带时刻的相处事件 → interactions.occurred_on 取「日」",
+              st == 200 and any(r.get("occurred_on") == meet_day for r in (inter3 or [])),
+              str(inter3)[:220])
+        # 用完就删：下面的「删事件不留孤儿明细」是拿 PREFIX 全量扫的，
+        # 留着这条会让那条断言看起来像失败（实际是另一条测试数据还在）
+        call("DELETE", "/api/events/%d" % e_meet["id"], expect=204)
+        created_events.remove(e_meet["id"])
+        st, inter4 = call("GET", "/api/interactions?person_id=%d" % p["id"])
+        check("扇出：删掉这条带时刻的相处事件后，明细也跟着走",
+              st == 200 and not any(r.get("occurred_on") == meet_day for r in (inter4 or [])),
+              str(inter4)[:220])
+
+        wear_day = (today - dt.timedelta(days=5)).isoformat()
+        st, o_time = call("POST", "/api/outfits", {
+            "person_id": p["id"], "event_date": wear_day, "event_time": "07:10:00",
+            "items": [{"category": "top", "name": PREFIX + "带时刻上衣"}],
+        })
+        check("穿搭：写入可带时刻", st == 201 and o_time.get("event_time") == "07:10:00",
+              str(o_time)[:220])
+        created_events.append(o_time["id"])
+        st, witem = call("GET", "/api/wardrobe/items/%d" % o_time["items"][0]["item_id"])
+        wears = (witem or {}).get("wears") or [{}]
+        check("穿搭：first/last_worn_on 是「日」（DATETIME 上取 .date()）",
+              st == 200 and witem.get("first_worn_on") == wear_day
+              and witem.get("last_worn_on") == wear_day, str(witem)[:220])
+        check("穿搭：穿着历史带时刻（衣橱详情也看得到几点穿的）",
+              wears[0].get("event_time") == "07:10:00", str(wears)[:220])
+
         # --- 扇出清理：删事件应带走明细 ---
         call("DELETE", "/api/events/%d" % e3["id"], expect=204)
         created_events.remove(e3["id"])

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -206,7 +207,12 @@ def refresh_worn_dates(session: Session, item_ids: Sequence[int]) -> None:
         .where(OutfitWear.item_id.in_(ids))
         .group_by(OutfitWear.item_id)
     ).all()
-    stats = {r[0]: (r[1], r[2]) for r in rows}
+    # ★ event_date 是 DATETIME，first/last_worn_on 是 DATE —— 在 Python 侧取 .date()，
+    #   不依赖 SQL 的 DATE() 函数返回什么类型（那是驱动/版本相关的坑）
+    stats = {
+        r[0]: tuple(v.date() if isinstance(v, dt.datetime) else v for v in (r[1], r[2]))
+        for r in rows
+    }
     for iid in ids:
         item = session.get(WardrobeItem, iid)
         if item is None:

@@ -13,7 +13,7 @@
       <div class="row">
         <span>
           <van-tag plain>{{ h.type_key }}</van-tag>
-          <span class="muted" style="margin-left: 6px">{{ h.event_date }}</span>
+          <span class="muted" style="margin-left: 6px">{{ fmtWhen(h) }}</span>
           <span class="muted" v-if="h.person_name"> · {{ h.person_name }}</span>
         </span>
       </div>
@@ -29,6 +29,7 @@
 import { ref } from 'vue'
 import { showToast } from 'vant'
 import { api } from '../api'
+import { fmtWhen } from '../lib/event-day'
 
 const q = ref('')
 const results = ref([])

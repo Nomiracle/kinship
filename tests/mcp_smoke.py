@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -189,6 +190,44 @@ async def main() -> None:
                 r = text_of(await session.call_tool("add_event", {
                     "who": TEST_NAME, "title": "模块未开也能写", "type_key": "contact"}))
                 check("模块开关不拦写入（已知设计：只在网页端拦）", "已记录" in r, r[:200])
+
+                # ---- 时刻精确到秒：MCP 的默认口径 ----
+                # 给过去某天 + 明确时刻 → 记这一刻
+                r = text_of(await session.call_tool("add_event", {
+                    "who": TEST_NAME, "title": "MCP 带时刻", "event_date": "2026-10-08",
+                    "event_time": "14:03"}))
+                check("add_event 可指定时刻（回显带 14:03）", "14:03" in r, r[:200])
+                # 不给日期也不给时刻 → 今天 + 此刻（否则「刚发生的事」没有时间）
+                r = text_of(await session.call_tool("add_event", {
+                    "who": TEST_NAME, "title": "MCP 默认此刻"}))
+                check("add_event 不给时间 → 记此刻（回显带日期+时分）",
+                      re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", r) is not None, r[:200])
+                # 明确记到过去某天、又没说时间 → 只记到日（不把「现在几点」塞进去）
+                r = text_of(await session.call_tool("add_event", {
+                    "who": TEST_NAME, "title": "MCP 只到日", "event_date": "2026-09-01"}))
+                check("add_event 过去某天不给时间 → 只记到日（回显不带时分）",
+                      "2026-09-01" in r and not re.search(r"2026-09-01 \d{2}:\d{2}", r), r[:200])
+
+                # 服务端真的存了秒级时刻（不只看回显文案）
+                hits = [e for e in api("GET", "/api/events?person_id=%d&limit=50" % pid)["items"]
+                        if e.get("title") == "MCP 带时刻"]
+                check("时刻落到库里（event_time='14:03:00'）",
+                      bool(hits) and hits[0].get("event_time") == "14:03:00", str(hits)[:240])
+                day_only = [e for e in api("GET", "/api/events?person_id=%d&limit=50" % pid)["items"]
+                            if e.get("title") == "MCP 只到日"]
+                check("只到日的记录 event_time=None（00:00 不算时刻）",
+                      bool(day_only) and day_only[0].get("event_time") is None, str(day_only)[:240])
+
+                r = text_of(await session.call_tool("add_outfit", {
+                    "who": TEST_NAME, "items": "MCP冒烟上衣", "event_date": "2026-10-09",
+                    "event_time": "07:10"}))
+                check("add_outfit 可指定时刻", "07:10" in r, r[:200])
+                items = api("GET", "/api/wardrobe/items?person_id=%d" % pid)["items"]
+                top = [i for i in items if i["name"] == "MCP冒烟上衣"][0]
+                detail = api("GET", "/api/wardrobe/items/%d" % top["id"])
+                wears = detail.get("wears") or []
+                check("穿搭穿着历史带时刻（衣橱详情）",
+                      any(w.get("event_time") == "07:10:00" for w in wears), str(wears)[:240])
 
     cleanup()
     check("测试数据已清理", all(p["display_name"] != TEST_NAME for p in api("GET", "/api/persons?include_inactive=true")))

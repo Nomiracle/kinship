@@ -24,6 +24,8 @@ from ..schemas import (
     WardrobeItemIn,
     WardrobeItemPatch,
     WardrobeMergeIn,
+    event_date_str,
+    event_time_str,
 )
 from ..services import media as media_svc
 from ..services import wardrobe as wardrobe_svc
@@ -97,16 +99,21 @@ def _wear_rows(session: Session, item_id: int) -> List[dict]:
     out = []
     for w in wears:
         e = events.get(w.event_id)
-        out.append({
-            "event_id": w.event_id,
-            "event_date": e.event_date if e else None,
-            "slot": w.slot,
-            "note": w.note,
-            "together": together.get(w.event_id, []),
-            "media": photos.get(w.event_id, []),
-        })
-    out.sort(key=lambda x: (x["event_date"] is None, x["event_date"] or dt.date.min), reverse=True)
-    return out
+        out.append((
+            e.event_date if e else None,
+            {
+                "event_id": w.event_id,
+                "event_date": event_date_str(e.event_date) if e else None,
+                "event_time": event_time_str(e.event_date) if e else None,
+                "slot": w.slot,
+                "note": w.note,
+                "together": together.get(w.event_id, []),
+                "media": photos.get(w.event_id, []),
+            },
+        ))
+    # ★ 排序用原始 datetime：返回体里的 event_date 是字符串，拿它和 dt.date.min 比会崩
+    out.sort(key=lambda p: (p[0] is None, p[0] or dt.datetime.min), reverse=True)
+    return [row for _, row in out]
 
 
 def _outfit_out(session: Session, event: Event, names: Optional[dict] = None) -> dict:
@@ -124,7 +131,9 @@ def _outfit_out(session: Session, event: Event, names: Optional[dict] = None) ->
         "person_id": event.person_id,
         "person_name": names.get(event.person_id),
         "type_key": event.type_key,
-        "event_date": event.event_date,
+        "event_date": event_date_str(event.event_date),
+        "event_at": event.event_date,
+        "event_time": event_time_str(event.event_date),
         "title": event.title,
         "body": event.body,
         "tags": event.tags,

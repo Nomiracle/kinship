@@ -19,46 +19,21 @@
       </p>
     </div>
 
-    <div class="card" v-for="e in items" :key="e.id">
-      <div class="row">
-        <span>
-          <van-tag plain>{{ typeLabel(e.type_key) }}</van-tag>
-          <span class="muted" style="margin-left: 6px">{{ e.event_date }}</span>
-          <span class="muted" v-if="!singlePerson"> · {{ e.person_name || '—' }}</span>
-        </span>
-        <span class="acts">
-          <span class="link" @click="openEdit(e)">编辑</span>
-          <span class="danger" @click="remove(e)">删除</span>
-        </span>
-      </div>
-      <div v-if="e.title"><strong>{{ e.title }}</strong></div>
-      <!-- 穿搭：单品 chips（去重后的实体，不再是散落的单品事件） -->
-      <div v-if="e.items && e.items.length" class="chips" style="margin-top: 6px">
-        <van-tag v-for="it in e.items" :key="it.item_id" size="medium" plain>
-          {{ itemLabel(it) }}<span v-if="it.color" class="muted"> · {{ it.color }}</span>
-        </van-tag>
-      </div>
-      <div v-if="e.body" style="font-size: 13px; margin-top: 4px; white-space: pre-wrap">{{ e.body }}</div>
-      <div v-if="e.media && e.media.length" class="thumbs">
-        <template v-for="m in e.media" :key="m.id">
-          <img
-            v-if="m.kind !== 'video'"
-            :src="api.mediaUrl(m)"
-            loading="lazy"
-            @click="openFull(m, e.media)"
-          />
-          <!-- 视频不能塞进 <img>（会变破图），也没有页面内预览：给个带 ▶ 的方块，点开看原片 -->
-          <div v-else class="vthumb" @click="openFull(m, e.media)">▶</div>
-        </template>
-      </div>
-      <div v-if="e.tags" class="chips" style="margin-top: 6px">
-        <van-tag v-for="(t, i) in e.tags.split(',')" :key="i" plain>{{ t.trim() }}</van-tag>
-      </div>
-    </div>
+    <!-- ★ 按日合并：一天一张卡（日头 = 日期/星期/条数/类型分布，默认折叠，点开看细节） -->
+    <EventDayList
+      :items="items"
+      :hide-person="singlePerson"
+      :label-of="typeLabel"
+      :item-label="itemLabel"
+      @edit="openEdit"
+      @delete="remove"
+      @preview="onPreview"
+    />
 
-    <van-empty v-if="!items.length" description="还没有记录" />
-    <div class="muted" v-if="total > items.length" style="text-align: center">
-      共 {{ total }} 条，已显示 {{ items.length }} 条
+    <div v-if="hasMore" class="muted" style="text-align: center; padding-bottom: 8px">
+      <van-button size="small" plain :loading="loadingMore" @click="loadMore">
+        加载更多（共 {{ total }} 条，已显示 {{ items.length }} 条）
+      </van-button>
     </div>
 
     <!-- 编辑 -->
@@ -69,7 +44,22 @@
           <span class="muted" @click="showEdit = false">关闭</span>
         </div>
 
-        <van-field v-model="form.event_date" type="date" label="日期" />
+        <van-field label="日期 / 时间">
+          <template #input>
+            <div style="width: 100%">
+              <!-- 精确到秒（原生 datetime-local 支持 step=1；Vant 的 picker 只到分钟）。
+                   只填日期 = 只记到日 —— 界面不会显示 00:00，也不会假装那是凌晨。 -->
+              <input v-model="form.when" type="datetime-local" step="1" class="picker" />
+              <div class="chips" style="margin-top: 6px">
+                <van-tag type="default" @click="setTime(nowLocalTime())">此刻</van-tag>
+                <van-tag v-if="formTime" plain @click="setTime('')">只记到日（清掉时间）</van-tag>
+              </div>
+              <p class="muted" style="margin: 6px 0 0">
+                {{ formTime ? '记到 ' + formDay + ' ' + formTime : '只记到日：' + (formDay || '（先选日期）') }}
+              </p>
+            </div>
+          </template>
+        </van-field>
 
         <!-- 穿搭：改的是「穿了哪几件」这个事实本身 -->
         <template v-if="form.type_key === 'outfit'">
@@ -205,6 +195,14 @@ import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { resolveScopedPerson } from '../lib/scope'
 import { previewUrls } from '../lib/media-preview'
+import {
+  dayOf,
+  nowLocalTime,
+  normalizeTime,
+  splitLocal,
+  toLocalInput,
+} from '../lib/event-day'
+import EventDayList from '../components/EventDayList.vue'
 
 const store = useArchiveStore()
 const route = useRoute()
@@ -213,6 +211,9 @@ const from = ref('')
 const to = ref('')
 const items = ref([])
 const total = ref(0)
+const hasMore = ref(false)
+const loadingMore = ref(false)
+const PAGE = 200
 // 本页实际显示谁：优先 URL ?person（从个人页点进来），否则跟随全局；都不写回全局。
 const scopedFromQuery = computed(() => !!resolveScopedPerson(route.query.person, null))
 const effectivePersonId = computed(() =>
@@ -251,6 +252,14 @@ const mediaVisible = computed(
   () => store.hasModule(Number(form.value?.person_id), 'media') !== false
 )
 
+// ---- 编辑面板的日期 / 时间（一个 datetime-local 输入，拆成日期与时刻）----
+const formDay = computed(() => splitLocal(form.value?.when).date)
+const formTime = computed(() => splitLocal(form.value?.when).time)
+function setTime(v) {
+  if (!form.value) return
+  form.value.when = toLocalInput(formDay.value, v)
+}
+
 function typeLabel(key) {
   const t = store.eventTypes.find((x) => x.key === key)
   return t ? t.label : key
@@ -269,16 +278,30 @@ function itemLabel(it) {
   return store.privacyMode && it.sensitivity === 'sensitive' ? '●●●' : it.name
 }
 
-async function load() {
+async function load(offset = 0, append = false) {
+  // group=day：服务端按「天」补齐被 limit 截断的那一天（同一天不会被分页撕成两页）
   const res = await api.events({
     person_id: effectivePersonId.value || undefined,
     type_key: type.value || undefined,
     date_from: from.value || undefined,
     date_to: to.value || undefined,
-    limit: 200,
+    group: 'day',
+    limit: PAGE,
+    offset: offset || undefined,
   })
-  items.value = res.items || []
+  const rows = res.items || []
+  items.value = append ? [...items.value, ...rows] : rows
   total.value = res.total || 0
+  hasMore.value = !!res.has_more
+}
+
+async function loadMore() {
+  loadingMore.value = true
+  try {
+    await load(items.value.length, true)
+  } finally {
+    loadingMore.value = false
+  }
 }
 
 function setType(k) {
@@ -291,7 +314,8 @@ async function openEdit(e) {
     id: e.id,
     type_key: e.type_key,
     person_id: e.person_id,
-    event_date: e.event_date,
+    // 日期 + 时间合成 datetime-local 的一个值；没有时刻就只给日期（= 只记到日）
+    when: toLocalInput(e.event_date, e.event_time || ''),
     title: e.title || '',
     body: e.body || '',
     tags: e.tags || '',
@@ -395,7 +419,8 @@ async function uploadPickedFiles(f) {
         person_id: f.person_id || undefined,
         event_id: f.id,
         // ★ 用事件日期而不是「今天」：相册按拍摄日排序，用今天会把老照片排到最前面
-        captured_on: f.event_date,
+        //   （captured_on 是 DATE 列，取日期部分）
+        captured_on: dayOf(f.when),
       })
       ok += 1
     } catch (e) {
@@ -408,11 +433,13 @@ async function uploadPickedFiles(f) {
 
 async function save() {
   const f = form.value
-  if (!f.event_date) {
+  const { date: day, time } = splitLocal(f.when)
+  if (!day) {
     showToast('先选日期')
     return
   }
-  const patch = { event_date: f.event_date }
+  // event_time 空 -> null = 只记到日（后端把 00:00:00 当「没有时刻」）
+  const patch = { event_date: day, event_time: normalizeTime(time) }
   if (f.type_key === 'outfit') {
     patch.items = [
       ...editItems.value.map((p) => ({ item_id: p.item_id })),
@@ -475,7 +502,13 @@ function openFull(m, list) {
   preview.show = true
 }
 
-watch([type, from, to, effectivePersonId], load)
+// 日卡里点图：同一份页面内预览逻辑（视频仍开原片）
+function onPreview({ media, list }) {
+  openFull(media, list)
+}
+
+// ★ load 现在带参数（offset/append），watch 不能直接把回调传进去：会把新值当 offset
+watch([type, from, to, effectivePersonId], () => load())
 
 // 内联编辑弹层打开时置共享的「正在编辑」态 —— App 据此隐藏底部 tabbar / 「＋记录」，
 // 免得编辑时下面还叠着一层导航。关闭或离开本页都要复位（onUnmounted 兜底）。
@@ -486,6 +519,14 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* datetime-local 的原生输入框（时间要能精确到秒，Vant picker 只到分钟） */
+.picker {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #ebedf0;
+  font-size: 14px;
+}
 .thumbs {
   display: flex;
   gap: 6px;

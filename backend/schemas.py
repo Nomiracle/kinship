@@ -7,9 +7,82 @@ from __future__ import annotations
 import datetime as dt
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ORM = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------- 事件时刻
+# ★ events.event_date 是 DATETIME（精确到秒），时间部分 00:00:00 = 「只记到日」。
+#   这两个口径必须全仓一致：入参归一化用 parse_event_at，出参用 event_date_str /
+#   event_time_str —— 别在各 router 里手写 strftime/slice（否则早晚分叉）。
+
+
+def parse_event_at(value) -> dt.datetime:
+    """把入参归一化成 datetime。
+
+    接受 `'2026-10-12'`（→ 当天 00:00:00，即「只记到日」）、
+    `'2026-10-12 14:03'` / `'2026-10-12T14:03:21'`、以及 date / datetime 对象。
+    """
+    if isinstance(value, dt.datetime):
+        return value.replace(microsecond=0)
+    if isinstance(value, dt.date):
+        return dt.datetime.combine(value, dt.time())
+    if isinstance(value, str):
+        s = value.strip()
+        if s:
+            try:
+                # py3.9 的 fromisoformat 就吃 'YYYY-MM-DD'、'YYYY-MM-DD HH:MM(:SS)'、带 T 的写法
+                return dt.datetime.fromisoformat(s).replace(microsecond=0)
+            except ValueError:
+                pass
+    raise ValueError("时间格式要像 2026-10-12 或 2026-10-12T14:03:21")
+
+
+def combine_event_time(value: dt.datetime, event_time: str) -> dt.datetime:
+    """把 `'HH:MM'` / `'HH:MM:SS'` 接到日期上（记录页/编辑面板的「时间」是独立输入框）。"""
+    parts = str(event_time).strip().split(":")
+    try:
+        if len(parts) not in (2, 3):
+            raise ValueError
+        hour, minute = int(parts[0]), int(parts[1])
+        second = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        raise ValueError("event_time 要像 14:03 或 14:03:21")
+    if not (0 <= hour < 24 and 0 <= minute < 60 and 0 <= second < 60):
+        raise ValueError("event_time 超出范围")
+    return value.replace(hour=hour, minute=minute, second=second, microsecond=0)
+
+
+def event_date_str(value: Optional[dt.datetime]) -> Optional[str]:
+    """出参的「日期」部分：保持 'YYYY-MM-DD'（老客户端与老断言都吃这个）。"""
+    return value.date().isoformat() if value else None
+
+
+def event_time_str(value: Optional[dt.datetime]) -> Optional[str]:
+    """出参的「时刻」：只有真记了时刻才给（00:00:00 = 只记到日 → None）。"""
+    if value is None or (value.hour, value.minute, value.second) == (0, 0, 0):
+        return None
+    return value.strftime("%H:%M:%S")
+
+
+class EventAtMixin(BaseModel):
+    """事件类入参共用：`event_date` 归一化 + 可选 `event_time` 合并。"""
+
+    @field_validator("event_date", mode="before", check_fields=False)
+    @classmethod
+    def _parse_event_at(cls, v):
+        return None if v is None else parse_event_at(v)
+
+    @model_validator(mode="after")
+    def _merge_event_time(self):
+        raw = getattr(self, "event_time", None)
+        if not raw:
+            return self
+        if getattr(self, "event_date", None) is None:
+            raise ValueError("给了 event_time 就必须同时给 event_date")
+        self.event_date = combine_event_time(self.event_date, raw)
+        return self
 
 
 # ---------------------------------------------------------------- 人
@@ -117,10 +190,13 @@ class AttributeOut(BaseModel):
 
 # ---------------------------------------------------------------- 事件
 
-class EventIn(BaseModel):
+class EventIn(EventAtMixin):
     person_id: Optional[int] = None
     type_key: str = "text"
-    event_date: dt.date
+    # ★ 发生时刻：给 'YYYY-MM-DD' 就是「只记到日」，给带时分的串就精确到秒
+    #   （也可以日期 + event_time 分开给，见 EventAtMixin）
+    event_date: dt.datetime
+    event_time: Optional[str] = None
     title: Optional[str] = None
     body: Optional[str] = None
     tags: Optional[str] = None
@@ -134,10 +210,11 @@ class EventIn(BaseModel):
     person_ids: Optional[List[int]] = None
 
 
-class EventPatch(BaseModel):
+class EventPatch(EventAtMixin):
     person_id: Optional[int] = None
     type_key: Optional[str] = None
-    event_date: Optional[dt.date] = None
+    event_date: Optional[dt.datetime] = None
+    event_time: Optional[str] = None
     title: Optional[str] = None
     body: Optional[str] = None
     tags: Optional[str] = None
@@ -158,7 +235,10 @@ class EventOut(BaseModel):
     person_id: Optional[int] = None
     person_name: Optional[str] = None
     type_key: str
+    # event_date 仍是 'YYYY-MM-DD'（老前端/老断言照旧）；要时刻看 event_time / event_at
     event_date: dt.date
+    event_at: Optional[dt.datetime] = None
+    event_time: Optional[str] = None
     title: Optional[str] = None
     body: Optional[str] = None
     tags: Optional[str] = None
@@ -317,6 +397,8 @@ class SearchHit(BaseModel):
     id: int
     type_key: str
     event_date: dt.date
+    # 记了时刻才给（00:00:00 = 只记到日）
+    event_time: Optional[str] = None
     person_id: Optional[int] = None
     person_name: Optional[str] = None
     title: Optional[str] = None
@@ -351,6 +433,7 @@ class WardrobeWearOut(BaseModel):
 
     event_id: int
     event_date: dt.date
+    event_time: Optional[str] = None
     slot: str
     note: Optional[str] = None
     together: List[str] = Field(default_factory=list)
@@ -395,9 +478,10 @@ class OutfitItemRef(BaseModel):
     note: Optional[str] = None
 
 
-class OutfitIn(BaseModel):
+class OutfitIn(EventAtMixin):
     person_id: int
-    event_date: dt.date
+    event_date: dt.datetime
+    event_time: Optional[str] = None
     items: List[OutfitItemRef] = Field(default_factory=list)
     location: Optional[str] = None
     note: Optional[str] = None

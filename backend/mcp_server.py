@@ -128,6 +128,26 @@ def _today() -> str:
     return dt.date.today().isoformat()
 
 
+def _when(d: Dict[str, Any]) -> str:
+    """记录的时刻文本：只记到日 → '2026-10-12'；有时刻 → '2026-10-12 14:03'。"""
+    date = str(d.get("event_date") or "")
+    t = d.get("event_time")
+    return ("%s %s" % (date, str(t)[:5])) if t else date
+
+
+def _default_event_time(event_date: Optional[str], event_time: Optional[str]) -> Optional[str]:
+    """MCP 的默认口径：没给时间、且（没给日期 = 今天 或 给的就是今天）→ 记此刻；
+    显式记到过去/未来某天 → 只记到日。
+
+    ★ 别把「现在几点」塞给 10 月 8 号的记录 —— 那不是发生时刻，是编的。
+    """
+    if event_time:
+        return event_time
+    if event_date and str(event_date).strip()[:10] != _today():
+        return None
+    return dt.datetime.now().strftime("%H:%M:%S")
+
+
 def _all_persons(include_inactive: bool = False) -> List[Dict[str, Any]]:
     params = {"include_inactive": "true"} if include_inactive else None
     return _call("GET", "/api/persons", params=params) or []
@@ -199,7 +219,7 @@ def _p_card(p: Dict[str, Any]) -> str:
 
 
 def _ev_line(e: Dict[str, Any]) -> str:
-    parts = ["#%s %s [%s]" % (e["id"], e["event_date"], e.get("type_key"))]
+    parts = ["#%s %s [%s]" % (e["id"], _when(e), e.get("type_key"))]
     if e.get("person_name"):
         parts.append(e["person_name"])
     if e.get("title"):
@@ -330,7 +350,7 @@ def search(q: str, who: Optional[str] = None, limit: int = 20) -> str:
     if not hits:
         return "（没有命中「%s」，检索方式=%s）" % (q, mode)
     return "命中 %d 条（检索方式=%s）：\n" % (len(hits), mode) + "\n".join(
-        "#%s %s [%s] %s %s%s" % (h["id"], h["event_date"], h.get("type_key"),
+        "#%s %s [%s] %s %s%s" % (h["id"], _when(h), h.get("type_key"),
                                  h.get("person_name") or "", h.get("title") or "",
                                  (" — %s" % h["snippet"]) if h.get("snippet") else "")
         for h in hits)
@@ -491,14 +511,16 @@ def wardrobe_item(item_id: int) -> str:
 @mcp.tool()
 @_safe
 def add_event(who: str, title: str, type_key: str = "text",
-              event_date: Optional[str] = None, body: Optional[str] = None,
+              event_date: Optional[str] = None, event_time: Optional[str] = None,
+              body: Optional[str] = None,
               tags: Optional[str] = None, location: Optional[str] = None,
               overnight: Optional[bool] = None, hours: Optional[float] = None,
               also_with: Optional[str] = None) -> str:
-    """给某人记一条记录（不指定日期就是今天）。
+    """给某人记一条记录（不指定日期就是今天；不指定时间就记此刻）。
 
     type_key: text 文字 / outfit 服装 / period 生理期 / meeting 相处 / gift 礼物 /
     health 健康 / mood 情绪 / milestone 里程碑 / contact 联系 / hobby 爱好 / social 社交。
+    event_date: YYYY-MM-DD；event_time: HH:MM 或 HH:MM:SS（记到过去某天又没说时间 → 只记到日）。
     注意：模块开关只在网页端做拦截，服务端与这里都不校验 —— 传了这个人没开的类型
     也会写进去，请自己确认类型合适（拿不准就先 person() 看模块）。
     also_with: 同时在场的人（三人场合），逗号分隔姓名。
@@ -508,6 +530,7 @@ def add_event(who: str, title: str, type_key: str = "text",
     payload: Dict[str, Any] = {
         "person_id": p["id"], "type_key": type_key,
         "event_date": event_date or _today(), "title": title,
+        "event_time": _default_event_time(event_date, event_time),
         "body": body, "tags": tags, "source": "mcp",
     }
     if type_key == "meeting":
@@ -516,18 +539,20 @@ def add_event(who: str, title: str, type_key: str = "text",
         ids = [p["id"]] + [_resolve(x.strip())["id"] for x in also_with.replace("、", ",").split(",") if x.strip()]
         payload["person_ids"] = sorted(set(ids))
     created = _call("POST", "/api/events", body=payload)
-    return "已记录 #%s：%s %s %s" % (created["id"], created["event_date"], created["type_key"], created["title"])
+    return "已记录 #%s：%s %s %s" % (created["id"], _when(created), created["type_key"], created["title"])
 
 
 @mcp.tool()
 @_safe
 def add_outfit(who: str, items: str, event_date: Optional[str] = None,
+               event_time: Optional[str] = None,
                note: Optional[str] = None, location: Optional[str] = None) -> str:
     """记一次穿搭：items = 穿了哪几件（逗号分隔）。
 
     已有的单品**自动复用**（不会重复建），没有的自动新建；穿次数随之累加。
     名称可带类别前缀，如 `下装:黑色阔腿裤, 上衣:白色毛衣`；不带前缀时先按名字找已有单品，
     找不到会建到「其他」类别（之后可在衣橱页改类别）。
+    不指定日期就是今天、不指定时间就记此刻（过去某天只记到日）。
     """
     _require_write()
     p = _resolve(who)
@@ -550,11 +575,12 @@ def add_outfit(who: str, items: str, event_date: Optional[str] = None,
         raise RuntimeError("items 不能为空（逗号分隔的单品名）")
     created = _call("POST", "/api/outfits", body={
         "person_id": p["id"], "event_date": event_date or _today(),
+        "event_time": _default_event_time(event_date, event_time),
         "items": refs, "note": note, "location": location, "source": "mcp",
     })
     names = "、".join(i["name"] for i in created["items"])
     return "已记穿搭 #%s：%s %s（引用 %d 件单品）" % (
-        created["id"], created["event_date"], names, len(created["items"]))
+        created["id"], _when(created), names, len(created["items"]))
 
 
 @mcp.tool()

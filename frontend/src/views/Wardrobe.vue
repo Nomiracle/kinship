@@ -158,7 +158,7 @@
         <div v-for="w in detail.wears" :key="w.event_id" class="wear">
           <div class="row">
             <span>
-              {{ w.event_date }}
+              {{ fmtWhen(w) }}
               <span class="muted">· {{ slotLabel(w.slot) }}</span>
             </span>
             <span class="muted">
@@ -209,6 +209,7 @@ import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { resolveScopedPerson, scopeQuery } from '../lib/scope'
 import { previewUrls } from '../lib/media-preview'
+import { fmtWhen } from '../lib/event-day'
 
 const store = useArchiveStore()
 const route = useRoute()

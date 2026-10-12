@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import CommitRoute, get_session
 from ..models import Event, Person
+from ..schemas import event_date_str, event_time_str
 from ..services import insight
 
 router = APIRouter(prefix="/api", tags=["insight"], route_class=CommitRoute)
@@ -87,7 +88,9 @@ def search(q: str = Query(min_length=1), person_id: Optional[int] = None,
         return {
             "q": q, "mode": "like" if not use_fulltext else "fulltext-empty→like",
             "items": [{
-                "id": e.id, "type_key": e.type_key, "event_date": e.event_date,
+                "id": e.id, "type_key": e.type_key,
+                "event_date": event_date_str(e.event_date),
+                "event_time": event_time_str(e.event_date),
                 "person_id": e.person_id, "person_name": names.get(e.person_id),
                 "title": e.title, "snippet": (e.body or "")[:120],
             } for e in evs],
@@ -96,7 +99,9 @@ def search(q: str = Query(min_length=1), person_id: Optional[int] = None,
     return {
         "q": q, "mode": mode,
         "items": [{
-            "id": r[0], "type_key": r[1], "event_date": r[2], "person_id": r[3],
+            "id": r[0], "type_key": r[1],
+            "event_date": event_date_str(r[2]), "event_time": event_time_str(r[2]),
+            "person_id": r[3],
             "person_name": names.get(r[3]), "title": r[4], "snippet": r[5],
         } for r in rows],
     }

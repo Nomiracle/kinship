@@ -189,12 +189,26 @@ class Event(Base):
         ForeignKey("persons.id", ondelete="CASCADE")
     )
     type_key: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
-    event_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    # ★ 发生时刻（本机墙钟，Asia/Shanghai），精确到秒。用 DATETIME 而不是 TIMESTAMP：
+    #   本库 @@time_zone=+00:00，TIMESTAMP 会被会话时区换算。
+    #   时间部分为 00:00:00 = 「只记到日」（历史数据与「记到某一天」的场景），
+    #   界面据此决定要不要显示时分（见 schemas.parse_event_at / 前端 lib/event-day.js）。
+    event_date: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(255))
     body: Mapped[Optional[str]] = mapped_column(Text)
     tags: Mapped[Optional[str]] = mapped_column(String(255))
     sensitivity: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="web")
+
+    @property
+    def event_day(self) -> dt.date:
+        """只到「日」的部分。
+
+        扇出明细（cycle_records.start_date / interactions.occurred_on / 图片拍摄日）与
+        生日倒计时这类「按天」的语义都用它 —— 直接拿 event_date(datetime) 去比 DATE 列
+        会漏配（踩坑 34/35：时间轴与统计会从此刻开始悄悄分叉）。
+        """
+        return self.event_date.date()
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()

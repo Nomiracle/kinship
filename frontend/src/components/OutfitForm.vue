@@ -5,7 +5,7 @@
     <div class="card" v-if="!pickMode">
       <h3>哪一天</h3>
       <div class="chips" style="margin-bottom: 8px">
-        <van-button size="small" :type="isToday ? 'primary' : 'default'" @click="setDate(todayStr)">
+        <van-button size="small" :type="isToday ? 'primary' : 'default'" @click="setToday">
           今天
         </van-button>
         <van-button size="small" :type="isYesterday ? 'primary' : 'default'" @click="setDate(shift(-1))">
@@ -15,7 +15,12 @@
           前天
         </van-button>
       </div>
-      <input v-model="eventDate" type="date" class="picker" />
+      <!-- 精确到秒：只填日期 = 只记到日 -->
+      <input v-model="eventWhen" type="datetime-local" step="1" class="picker" />
+      <div class="chips" style="margin-top: 6px">
+        <van-tag type="default" @click="setTime(nowLocalTime())">此刻</van-tag>
+        <van-tag v-if="eventTime" plain @click="setTime('')">只记到日（清掉时间）</van-tag>
+      </div>
       <p class="muted" style="margin: 8px 0 0" :class="{ warn: !isToday }">
         将记到：<strong>{{ dateHuman }}</strong>
         <span v-if="!isToday">（不是今天，请再确认一次）</span>
@@ -137,6 +142,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { showConfirmDialog, showToast } from 'vant'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
+import { nowLocalTime, normalizeTime, splitLocal, toLocalInput } from '../lib/event-day'
 
 const props = defineProps({
   personId: { type: Number, required: true },
@@ -155,26 +161,36 @@ const pickMode = computed(() => props.mode === 'pick')
 const store = useArchiveStore()
 const WEEK = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
-// ---- 日期 ----
+// ---- 日期 / 时间 ----
 const todayStr = new Date().toLocaleDateString('sv-SE') // YYYY-MM-DD（本地时区）
-const eventDate = ref(todayStr)
+const eventWhen = ref(toLocalInput(todayStr, nowLocalTime()))
+const eventDay = computed(() => splitLocal(eventWhen.value).date)
+const eventTime = computed(() => splitLocal(eventWhen.value).time)
 function shift(days) {
   const d = new Date()
   d.setDate(d.getDate() + days)
   return d.toLocaleDateString('sv-SE')
 }
-function setDate(v) {
-  eventDate.value = v
+// 「今天」默认带此刻；昨天/前天只到日、不带时间（过去的时刻是编出来的）
+function setToday() {
+  eventWhen.value = toLocalInput(todayStr, nowLocalTime())
 }
-const isToday = computed(() => eventDate.value === todayStr)
-const isYesterday = computed(() => eventDate.value === shift(-1))
-const isBeforeYesterday = computed(() => eventDate.value === shift(-2))
+function setDate(v) {
+  eventWhen.value = toLocalInput(v, '')
+}
+function setTime(v) {
+  eventWhen.value = toLocalInput(eventDay.value, v)
+}
+const isToday = computed(() => eventDay.value === todayStr)
+const isYesterday = computed(() => eventDay.value === shift(-1))
+const isBeforeYesterday = computed(() => eventDay.value === shift(-2))
 const dateHuman = computed(() => {
-  if (!eventDate.value) return ''
-  const d = new Date(eventDate.value + 'T00:00:00')
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+  if (!eventDay.value) return ''
+  const d = new Date(eventDay.value + 'T00:00:00')
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
     d.getDate()
   ).padStart(2, '0')} ${WEEK[d.getDay()]}`
+  return eventTime.value ? `${day} ${eventTime.value.slice(0, 5)}` : day
 })
 
 // ---- 单品 ----
@@ -327,7 +343,7 @@ async function uploadPickedFiles(createdId) {
       await api.uploadMedia(item.file || item, {
         person_id: props.personId,
         event_id: createdId,
-        captured_on: eventDate.value,
+        captured_on: eventDay.value,
       })
       ok += 1
     } catch (e) {
@@ -343,7 +359,7 @@ async function submit() {
     showToast('先选一个人')
     return
   }
-  if (!eventDate.value) {
+  if (!eventDay.value) {
     showToast('先选日期')
     return
   }
@@ -357,7 +373,7 @@ async function submit() {
         cancelButtonText: '改回今天',
       })
     } catch {
-      setDate(todayStr)
+      setToday()
       return
     }
   }
@@ -383,7 +399,8 @@ async function submit() {
     ]
     const created = await api.createOutfit({
       person_id: props.personId,
-      event_date: eventDate.value,
+      event_date: eventDay.value,
+      event_time: normalizeTime(eventTime.value),
       items,
       note: note.value || null,
       location: location.value || null,
@@ -393,6 +410,7 @@ async function submit() {
     })
     const ok = await uploadPickedFiles(created.id)
     resetContent()
+    if (isToday.value) eventWhen.value = toLocalInput(todayStr, nowLocalTime())
     await loadItems()
     emit('saved', created)
     const what = created.title ? `：${created.title}` : ''
