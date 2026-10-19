@@ -2,7 +2,11 @@
 
 设计：
   · 文件写进 deploy/media/YYYY/MM/（仓库之外），文件名由服务端生成，杜绝路径穿越
-  · 缩略图用 macOS 自带 `sips`（HEIC → JPG、等比缩放到 <= N px），不引 Pillow
+  · 图片处理用 **Pillow**（+ pillow-heif 解 HEIC）：HEIC/WebP → JPG、等比缩放到 <= N px
+    ★ 不用 macOS 的 `sips`：它只在 macOS 存在，服务搬到 Linux 后缩略图与 HEIC 转码会**静默失效**
+      （大图不缩、iPhone 原图直接进库，安卓/Chrome 打不开）。Pillow 两端行为一致，
+      而且它跟代码一起走（同一份 requirements.txt），换机器不用另外装系统包。
+  · 没装 Pillow 时所有图片处理降级为「原样返回」，绝不因此丢文件或让上传失败
   · 原图默认保留（keep_original=true），缩略图糊了还能回原图
   · 数据库只存相对路径，换机器/搬目录不用改数据
 """
@@ -10,28 +14,54 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import shutil
-import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from ..config import settings
+
+try:  # Pillow 是运行依赖，但缺了也不该让服务起不来
+    from PIL import Image, ImageOps
+
+    _PIL_OK = True
+except Exception:  # pragma: no cover - 只在缺依赖的环境触发
+    Image = ImageOps = None  # type: ignore[assignment]
+    _PIL_OK = False
+
+_HEIF_OK = False
+if _PIL_OK:
+    try:
+        import pillow_heif
+
+        # 注册后 Image.open 能直接读 .heic/.heif（iPhone 直传的原图）
+        pillow_heif.register_heif_opener()
+        _HEIF_OK = True
+    except Exception:  # pragma: no cover
+        _HEIF_OK = False
+
+# 等比缩放要用的重采样滤镜（Pillow 10 起搬到 Image.Resampling；标 Any 只为免去可空包裹）
+_RESAMPLE: Any = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1) if _PIL_OK else 1
 
 # 只认这些扩展名（其余一律拒绝，避免把任意文件塞进媒体目录）
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".m4v"}
 ALLOWED_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
-# sips 能把这些转成 jpg
-SIPS_CONVERT = {".heic", ".heif", ".webp"}
+# 需要转成 JPG 才能给浏览器看的格式（HEIC 只有 Safari 认）
+TRANSCODE_EXTS = {".heic", ".heif", ".webp"}
 
 
 class MediaError(Exception):
     pass
 
 
-def _sips() -> Optional[str]:
-    return shutil.which("sips")
+def image_backend() -> Optional[str]:
+    """当前图片处理后端（`/api/media/storage` 与设置页用它自检）。
+
+    None = 没装 Pillow：缩略图与 HEIC 转码会静默跳过，上传仍然成功（只是没缩略图）。
+    """
+    if not _PIL_OK:
+        return None
+    return "pillow+heif" if _HEIF_OK else "pillow"
 
 
 def extension_of(filename: str) -> str:
@@ -96,19 +126,21 @@ def convert_heic(rel_path: str) -> Tuple[str, Optional[str]]:
     """HEIC/HEIF/WebP → JPG（iPhone 直传的原图）。
 
     返回 (展示用相对路径, 原始文件相对路径或 None)。
-    转换失败或没有 sips 时原样返回输入路径，绝不因此丢文件。
+    转换失败或没有 Pillow 时原样返回输入路径，绝不因此丢文件。
     """
     ext = Path(rel_path).suffix.lower()
-    if ext not in SIPS_CONVERT:
+    if ext not in TRANSCODE_EXTS or not _PIL_OK:
         return rel_path, None
-    tool = _sips()
-    if not tool:
-        return rel_path, None
+    assert Image is not None and ImageOps is not None  # _PIL_OK 已保证；此处只为类型收窄
     src = settings.media_path / rel_path
     dst = src.with_suffix(".jpg")
     try:
-        subprocess.run([tool, "-s", "format", "jpeg", str(src), "--out", str(dst)],
-                       check=True, capture_output=True, timeout=60)
+        with Image.open(src) as im:
+            # EXIF 方向要先应用，否则 iPhone 竖拍的照片在网页里是躺着的
+            im = ImageOps.exif_transpose(im) or im
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            im.save(dst, format="JPEG", quality=88)
     except Exception:
         return rel_path, None
     display = str(Path(*Path(rel_path).parts[:-1]) / dst.name)
@@ -122,11 +154,11 @@ def make_thumbnail(rel_path: str) -> Optional[str]:
     """等比缩到 <= thumbnail_max_px，输出到同目录 thumbs/。
 
     ★ 如果原图本来就小于阈值，直接返回 None（前端会回退用原图）——
-      `sips -Z` 会把小图**放大**到目标尺寸，白占空间还更糊。
+      放大到目标尺寸只会更糊、白占空间（sips 时代真踩过）。
     """
-    tool = _sips()
-    if not tool:
+    if not _PIL_OK:
         return None
+    assert Image is not None and ImageOps is not None  # _PIL_OK 已保证；此处只为类型收窄
     src = settings.media_path / rel_path
     if not src.is_file() or src.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
         return None
@@ -137,34 +169,34 @@ def make_thumbnail(rel_path: str) -> Optional[str]:
     thumb_dir.mkdir(parents=True, exist_ok=True)
     dst = thumb_dir / src.name
     try:
-        # ★ 必须显式指定输出格式：不指定时 sips 会沿用**输入内容**的格式，
-        #   于是 HEIC 输入会写出 HEIC 字节挂 .jpg 名字 —— 前端破图（踩过）
-        fmt = "png" if src.suffix.lower() == ".png" else "jpeg"
-        subprocess.run([tool, "-Z", str(settings.thumbnail_max_px), "-s", "format", fmt,
-                        str(src), "--out", str(dst)],
-                       check=True, capture_output=True, timeout=60)
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im) or im
+            im.thumbnail((settings.thumbnail_max_px, settings.thumbnail_max_px), _RESAMPLE)
+            # ★ 显式指定输出格式（跟 sips 时代的坑同源）：沿用输入格式会让 HEIC 写出 HEIC 字节
+            #   挂 .jpg 名字 —— 前端破图。PNG 走 PNG（保住透明通道），其余一律 JPEG。
+            if src.suffix.lower() == ".png":
+                if im.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+                    im = im.convert("RGBA")
+                im.save(dst, format="PNG", optimize=True)
+            else:
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                im.save(dst, format="JPEG", quality=85)
     except Exception:
         return None
     return str(Path(*Path(rel_path).parts[:-1]) / "thumbs" / src.name)
 
 
 def dimensions(rel_path: str) -> Tuple[Optional[int], Optional[int]]:
-    tool = _sips()
-    if not tool:
+    if not _PIL_OK:
         return None, None
+    assert Image is not None  # _PIL_OK 已保证；此处只为类型收窄
     src = settings.media_path / rel_path
     try:
-        out = subprocess.run([tool, "-g", "pixelWidth", "-g", "pixelHeight", str(src)],
-                             check=True, capture_output=True, text=True, timeout=30).stdout
+        with Image.open(src) as im:
+            return im.width, im.height
     except Exception:
         return None, None
-    w = h = None
-    for line in out.splitlines():
-        if "pixelWidth" in line:
-            w = int(line.split(":")[-1].strip())
-        elif "pixelHeight" in line:
-            h = int(line.split(":")[-1].strip())
-    return w, h
 
 
 def delete_files(*rel_paths: Optional[str]) -> None:

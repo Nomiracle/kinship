@@ -41,10 +41,6 @@ thumbnail_max_px = 800
 # 上传后是否保留原图（true 建议开启：缩略图糊了还能回原图）
 keep_original = true
 
-[search]
-# 查询词长度 <= 此值时走 LIKE 回退（ngram 的固有限制）
-like_fallback_max_chars = 2
-
 [reminder]
 # 每日摘要
 daily_digest_time = "07:00"

@@ -59,7 +59,7 @@ class Settings:
     thumbnail_max_px: int = 800
     keep_original: bool = True
 
-    like_fallback_max_chars: int = 2
+    # 检索：已统一走 LIKE（ngram 索引退役，见 migrations/b2f7c0a91d34），故无检索相关配置
 
     daily_digest_time: str = "07:00"
     no_contact_days: int = 14
@@ -243,9 +243,6 @@ def load_settings() -> Settings:
     s.max_upload_mb = int(media.get("max_upload_mb", s.max_upload_mb))
     s.thumbnail_max_px = int(media.get("thumbnail_max_px", s.thumbnail_max_px))
     s.keep_original = bool(media.get("keep_original", s.keep_original))
-
-    search = data.get("search", {})
-    s.like_fallback_max_chars = int(search.get("like_fallback_max_chars", s.like_fallback_max_chars))
 
     rem = data.get("reminder", {})
     s.daily_digest_time = str(rem.get("daily_digest_time", s.daily_digest_time))

@@ -220,15 +220,9 @@ class Event(Base):
     __table_args__ = (
         Index("ix_events_person_date", "person_id", "event_date"),
         Index("ix_events_type_date", "type_key", "event_date"),
-        # 中文全文检索：ngram 分词。★ 单字查询必然 0 命中（ngram_token_size=2），
-        #   后端对 <=2 字的查询回退 LIKE，见 services.search
-        Index(
-            "ft_events_ngram",
-            "title",
-            "body",
-            mysql_prefix="FULLTEXT",
-            mysql_with_parser="ngram",
-        ),
+        # ★ 这里没有中文全文索引：ngram parser 只有 MySQL 有，MariaDB 会直接报
+        #   `Function 'ngram' is not defined` —— 同一份代码在两套数据库上行为分叉。
+        #   检索统一走 LIKE（见 routers/insight.py 的 /api/search，档案量级下开销可忽略）。
     )
 
 

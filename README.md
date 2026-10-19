@@ -10,7 +10,7 @@ A self-hosted, **relationship-generic** archive: keep the details that matter ab
 
 - **One timeline per person** — text notes, outfits, gifts, meetings, health, milestones; filterable, searchable.
 - **Wardrobe (two layers, deduplicated)** — a garment is a **single row** (`wardrobe_items`, unique per person + category + name + color); wearing it again adds a *wear record* (`outfit_wears`) instead of a new event, so "worn 3 times · last seen 10 days ago" is computed, never hand-maintained. A duplicate detector proposes likely repeats (same name, or names that contain each other) and merging is always a human decision — a soft delete that can be undone. Merge `宝蓝色毛衣` with `浅蓝色毛衣` automatically and you have destroyed real information.
-- **Photo-records** — attach images to any record (outfit-of-the-day, a gift, a receipt). HEIC from an iPhone is converted server-side. Thumbnails are generated with `sips`; images smaller than the thumbnail budget are left alone (never upscaled).
+- **Photo-records** — attach images to any record (outfit-of-the-day, a gift, a receipt). HEIC from an iPhone is converted server-side. Thumbnails are generated with Pillow (`pillow-heif` for HEIC); images smaller than the thumbnail budget are left alone (never upscaled).
 - **Companion module (opt-in per person)** — cycle records, calendar view and a predicted window. *Predictions are a courtesy reminder only (assume ±3 days) and must not be used for contraception or any medical decision.*
 - **Time-together tracking** — visits, overnights, days-since-last-meeting.
 - **Relationship graph** — who is who to whom (parent, uncle, cousin…).
@@ -41,8 +41,8 @@ The app is split so that **code, configuration and data never share a repository
 
 - **Frontend** — Vue 3 + Vite + Vue Router + Pinia + [Vant](https://vant-ui.github.io/vant/) (mobile-first) + PWA
 - **Backend** — FastAPI + SQLAlchemy 2.0 + Alembic + PyMySQL
-- **Database** — MySQL 8.4 (utf8mb4; Chinese full-text via `FULLTEXT … WITH PARSER ngram`)
-- **Images** — macOS `sips` for resize/HEIC conversion (no Pillow)
+- **Database** — MySQL 8.4 or MariaDB 11.x (utf8mb4). Search is plain `LIKE`, deliberately without any full-text parser — the `ngram` parser exists only on MySQL, so a schema that depends on it cannot even migrate to MariaDB.
+- **Images** — Pillow + `pillow-heif` for resize and HEIC conversion (cross-platform; no macOS-only `sips`).
 - **Lunar calendar** — self-contained 1900–2099 converter (no third-party dependency)
 
 ## Quickstart (development)
@@ -114,7 +114,7 @@ tests/          # synthetic fixtures only
 - [x] P0 — environment (MySQL 8.4), repository skeleton, privacy guards, CI
 - [x] P1 — schema + Alembic, person switcher, module switches, four record types, timeline,
   today card (lunar countdown), cycle prediction, search, to-do pool
-- [x] P2 — image/video upload (HEIC auto-convert, `sips` thumbnails), gallery, to-do pool, dashboard
+- [x] P2 — image/video upload (HEIC auto-convert, Pillow thumbnails), gallery, to-do pool, dashboard
 - [x] P2.5 — wardrobe rework: garments as first-class records (`wardrobe_items` + `outfit_wears`),
   duplicate candidates with human-confirmed, reversible merging; outfit entry by picking garments
 - [ ] P3 — cycle calendar, together-stats, relationship graph, PWA, daily digest

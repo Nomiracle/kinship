@@ -1,11 +1,10 @@
 <template>
   <div>
     <div class="card">
-      <van-field v-model="q" label="搜索" placeholder="搜关键词（≥3 字走全文索引）" @keyup.enter="doSearch" />
+      <van-field v-model="q" label="搜索" placeholder="搜关键词（标题 / 正文 / 标签）" @keyup.enter="doSearch" />
       <van-button block type="primary" style="margin-top: 10px" @click="doSearch">搜索</van-button>
       <p class="muted" v-if="mode">
-        检索方式：{{ mode }}
-        <span v-if="mode.includes('like')">（中文单/双字无法用 ngram 全文索引，自动回退）</span>
+        检索方式：{{ mode === 'like' ? 'LIKE 匹配（按关键词包含）' : mode }}
       </p>
     </div>
 

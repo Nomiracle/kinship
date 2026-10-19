@@ -7,6 +7,8 @@ pymysql>=1.1
 python-multipart>=0.0.9
 tomli>=2.0          # 系统 Python 3.9 没有 tomllib
 pydantic>=2.7
+pillow>=10.0          # 缩略图 / 尺寸 / HEIC→JPG（跨平台，替代只在 macOS 有的 sips）
+pillow-heif>=0.16     # HEIC/HEIF 解码（iPhone 直传的原图）
 
 # Test / lint
 pytest>=8.0

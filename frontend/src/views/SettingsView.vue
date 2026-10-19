@@ -42,7 +42,7 @@
         <div class="row"><span>部署目录</span><span class="muted">{{ health?.deploy_dir }}</span></div>
         <div class="row"><span>媒体用量</span><span>{{ storage?.files || 0 }} 个文件 · {{ storage?.mb || 0 }} MB</span></div>
         <div class="row"><span>媒体目录</span><span class="muted">{{ storage?.dir }}</span></div>
-        <div class="row"><span>图片处理</span><span>{{ storage?.sips_available ? 'sips 可用（HEIC 自动转）' : 'sips 不可用' }}</span></div>
+        <div class="row"><span>图片处理</span><span>{{ storage?.image_backend ? `可用（${storage.image_backend}，HEIC 自动转）` : '不可用（缺 Pillow）' }}</span></div>
       </template>
     </div>
   </div>

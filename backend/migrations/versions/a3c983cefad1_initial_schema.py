@@ -95,7 +95,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['person_id'], ['persons.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ft_events_ngram', 'events', ['title', 'body'], unique=False, mysql_prefix='FULLTEXT', mysql_with_parser='ngram')
     op.create_index('ix_events_person_date', 'events', ['person_id', 'event_date'], unique=False)
     op.create_index('ix_events_type_date', 'events', ['type_key', 'event_date'], unique=False)
     op.create_table('person_modules',
@@ -226,7 +225,6 @@ def downgrade() -> None:
     op.drop_table('person_modules')
     op.drop_index('ix_events_type_date', table_name='events')
     op.drop_index('ix_events_person_date', table_name='events')
-    op.drop_index('ft_events_ngram', table_name='events', mysql_prefix='FULLTEXT', mysql_with_parser='ngram')
     op.drop_table('events')
     op.drop_table('cycle_records')
     op.drop_index('ix_attributes_person_cat', table_name='attributes')

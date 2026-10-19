@@ -57,7 +57,7 @@ def _find_same_upload(session: Session, rel: str, person_id: Optional[int],
     只有磁盘文件还在时才复用：文件被手工删过时宁可新建一行，也不留破图引用。
     """
     cands = {rel}
-    if Path(rel).suffix.lower() in media_svc.SIPS_CONVERT:
+    if Path(rel).suffix.lower() in media_svc.TRANSCODE_EXTS:
         cands.add(str(Path(rel).with_suffix(".jpg")))
     row = session.scalar(
         select(Media).where(
@@ -203,5 +203,5 @@ def storage_info():
         "mb": round(total / 1024 / 1024, 1),
         "max_upload_mb": settings.max_upload_mb,
         "thumbnail_max_px": settings.thumbnail_max_px,
-        "sips_available": media_svc._sips() is not None,
+        "image_backend": media_svc.image_backend(),
     }

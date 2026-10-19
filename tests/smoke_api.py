@@ -21,6 +21,25 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures"))
 from make_fixture import png_bytes  # noqa: E402  —— 合成图片，仓库内无真实照片
 
+
+def heic_bytes(width: int, height: int, rgb: tuple = (200, 120, 60)):
+    """合成一张 HEIC（iPhone 直传格式）；本环境没有 pillow-heif 时返回 None。
+
+    仓库红线：不引入真实照片，素材一律现场合成。
+    """
+    try:
+        import io
+
+        import pillow_heif
+        from PIL import Image
+
+        pillow_heif.register_heif_opener()
+        buf = io.BytesIO()
+        Image.new("RGB", (width, height), rgb).save(buf, format="HEIF")
+        return buf.getvalue()
+    except Exception:
+        return None
+
 BASE = os.environ.get("BASE", "http://127.0.0.1:8787").rstrip("/")
 TOKEN = os.environ.get("ARCHIVE_TOKEN", "")
 PREFIX = "__smoke__"
@@ -262,13 +281,16 @@ def main() -> int:
         check("今天卡片含农历与本人",
               st == 200 and td.get("lunar") and td.get("persons"), str(td)[:200])
 
+        # 检索统一走 LIKE（ngram 索引已退役：MariaDB 没有那个 parser）。
+        # 断言守的性质是「多字/单字都搜得到」，不是「走了哪个索引」——
+        # 后者是实现细节，换数据库就不成立，别把它当安全断言守着。
         st, s1 = call("GET", "/api/search?q=%s" % urllib.parse.quote(PREFIX + "棕色"))
-        check("多字搜索走全文索引（fulltext）",
-              st == 200 and s1.get("mode") == "fulltext" and s1.get("items"), str(s1)[:200])
+        check("多字搜索命中（LIKE）",
+              st == 200 and s1.get("mode") == "like" and s1.get("items"), str(s1)[:200])
 
         st, s2 = call("GET", "/api/search?q=%s" % urllib.parse.quote("棕"))
-        check("单字搜索回退 LIKE（ngram 单字必然 0 命中）",
-              st == 200 and "like" in str(s2.get("mode")), str(s2)[:200])
+        check("单字搜索命中（LIKE）",
+              st == 200 and s2.get("mode") == "like" and s2.get("items"), str(s2)[:200])
 
         # --- 「我」的删除保护：有记录时不允许删，清空后允许 ---
         st, e_self = call("POST", "/api/events", {
@@ -334,8 +356,29 @@ def main() -> int:
                                                               "image/png")}))
             if st_small == 201:
                 created_media.append(up_small[0]["id"])
-                check("小图不生成缩略图（防 sips 放大）", up_small[0].get("thumb_path") is None,
+                check("小图不生成缩略图（防放大）", up_small[0].get("thumb_path") is None,
                       str(up_small[0].get("thumb_path")))
+
+            # HEIC 直传（iPhone 默认格式）→ 服务端必须转成 JPG。
+            # 这条守的是「任何平台上都看得到图」：sips 时代这能力只在 macOS 存在，
+            # 换到 Linux 会**静默失效**（原图直接进库，安卓/Chrome 破图），所以真测一遍。
+            # 故意不挂 event_id：本用例只查转码，别去动上面那条「事件带回 1 张 media」的断言。
+            heic = heic_bytes(400, 300)
+            if heic is None:
+                print("  ~ 跳过：HEIC 转码断言（本环境没装 pillow-heif）")
+            else:
+                st_h, up_h = call("POST", "/api/media",
+                                  raw=multipart({"person_id": str(p["id"])},
+                                                {"file": ("IMG_0001.heic", heic, "image/heic")}))
+                ok_jpg = st_h == 201 and up_h and str(up_h[0].get("path", "")).lower().endswith(".jpg")
+                check("HEIC 上传被转码成 JPG", ok_jpg, "status=%s %s" % (st_h, up_h))
+                if st_h == 201:
+                    created_media.append(up_h[0]["id"])
+                    check("HEIC 原图保留（source_path 指向 .heic）",
+                          str(up_h[0].get("source_path", "")).lower().endswith(".heic"),
+                          str(up_h[0].get("source_path")))
+                    st_h2, _ = call("GET", "/media/%s" % up_h[0]["path"])
+                    check("转码后的 JPG 可取（200）", st_h2 == 200, "status=%s" % st_h2)
 
             st4, tl2 = call("GET", "/api/events?person_id=%d" % p["id"])
             hit = [x for x in (tl2 or {}).get("items", []) if x["id"] == e_img["id"]]
