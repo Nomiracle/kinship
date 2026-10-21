@@ -85,8 +85,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { showToast } from 'vant'
+import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { birthdayLine } from '../lib/birthday'
@@ -98,8 +99,10 @@ const CIRCLES = [
 ]
 
 const store = useArchiveStore()
+const route = useRoute()
 const circle = ref(null)
 const showAdd = ref(false)
+watch(() => route.query.add, (value) => { if (value === '1') showAdd.value = true })
 
 const relationTypes = computed(
   () => (store.config?.relation_types || []).filter((r) => r.key !== 'self')
@@ -159,6 +162,7 @@ async function addPerson() {
 }
 
 onMounted(async () => {
+  if (route.query.add === '1') showAdd.value = true
   await store.ensureLoaded()
   if (store.persons.length && !store.config) await store.loadConfig()
 })

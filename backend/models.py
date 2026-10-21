@@ -470,6 +470,24 @@ class Todo(Base):
     __table_args__ = (Index("ix_todos_done_person", "done", "person_id"),)
 
 
+class IdempotencyKey(Base):
+    """持久幂等键：Idempotency-Key → 指纹 + 响应原子持久。"""
+
+    __tablename__ = "idempotency_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_status: Mapped[Optional[int]] = mapped_column(Integer)
+    response_body: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    __table_args__ = (Index("ix_idempotency_key", "idempotency_key"),)
+
+
 class AuditLog(Base):
     """写入留痕：什么来源、什么时候、改了哪个实体。
     用于「她纠正过生日」这类事实的可追溯，而不是重蹈覆辙。"""

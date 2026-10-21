@@ -23,6 +23,7 @@ import 'vant/es/switch/style'
 import 'vant/es/tag/style'
 import 'vant/es/toast/style'
 import 'vant/es/uploader/style'
+import './styles/tokens.css'
 
 createApp(App).use(createPinia()).use(router).use(Vant).mount('#app')
 

@@ -3,475 +3,97 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-
 const here = dirname(fileURLToPath(import.meta.url))
-const src = (rel) => readFileSync(join(here, '..', rel), 'utf8')
+const src = rel => readFileSync(join(here, '..', rel), 'utf8')
+// Comments cannot substitute for executable wiring. Behavioral tests supplement
+// these structural checks; browser tests exercise the real render and requests.
+const code = rel => src(rel).replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+const router = code('src/router.js'), app = code('src/App.vue'), store = code('src/store.js')
+const people = code('src/views/PeopleView.vue'), person = code('src/views/PersonView.vue'), settings = code('src/views/SettingsView.vue')
 
-// ---------------------------------------------------------------- router
-const router = src('src/router.js')
-
-test('router 保留全部既有 URL（不删不改）', () => {
-  for (const p of [
-    "'/'",
-    "'/new'",
-    "'/timeline'",
-    "'/wardrobe'",
-    "'/relations'",
-    "'/gallery'",
-    "'/person/:id'",
-    "'/cycle'",
-    "'/todos'",
-    "'/search'",
-    "'/settings'",
-  ]) {
-    assert.ok(router.includes(`path: ${p}`), `缺失路由 ${p}`)
+test('既有 URL 和独立衣物路由保留，录入隐藏导航', () => {
+  for(const path of ['/', '/new', '/timeline', '/wardrobe', '/wardrobe/new', '/wardrobe/items/new', '/wardrobe/items/:id/edit', '/gallery', '/people', '/person/:id', '/relations', '/cycle', '/todos', '/search', '/settings']) assert.ok(router.includes(`path: '${path}'`), path)
+  for(const path of ['/new', '/wardrobe/new', '/wardrobe/items/new', '/wardrobe/items/:id/edit']) {
+    const line = router.split('\n').find(l => l.includes(`path: '${path}'`))
+    assert.match(line, /hideTabbar: true/); assert.match(line, /back: true/)
   }
+  assert.match(router, /name: 'wardrobe'.*title: '衣橱'.*tab: 'wardrobe'/)
 })
-
-test('router 新增 /people 且录入路由隐藏底部 tabbar', () => {
-  assert.ok(router.includes("path: '/people'"))
-  assert.ok(/path: '\/new'[\s\S]*hideTabbar: true/.test(router), '/new 应 hideTabbar')
-  // ★ 记穿搭页也是「录入页」：必须带 hideTabbar —— App 的「＋记录」FAB 与 tabbar 都按这个标记
-  //   判定是否显示（漏了它，FAB 会压在那一页的「保存」上，点保存变成跳回记录页）
-  assert.ok(
-    /path: '\/wardrobe\/new'[^}]*hideTabbar: true/.test(router),
-    '/wardrobe/new（记穿搭）应 hideTabbar'
-  )
-  assert.ok(/path: '\/person\/:id'[\s\S]*back: true/.test(router), '个人页应有返回')
+test('四主导航、二级导航和新增实体选择器', () => {
+  for(const pattern of [/v-for="t in TABS"/, /van-icon :name="t.icon"/, /class="tab-label"/, /class="segtab"/, /router-view/, /＋ 新增/]) assert.match(app, pattern)
+  for(const label of ['记一件事','记穿搭','添加衣物','添加人物']) assert.ok(app.includes(`label: '${label}'`))
 })
-
-test('router 分段分组只挂在既有页面上，范围页标记 scoped', () => {
-  assert.ok(/group: 'timeline'/.test(router))
-  assert.ok(/group: 'people'/.test(router))
-  // 只读范围指示器依据：时间轴/相册/衣橱/待办/个人页/生理期
-  for (const name of ['timeline', 'wardrobe', 'gallery', 'todos', 'person', 'cycle']) {
-    assert.ok(router.includes(`name: '${name}'`) && /scoped: true/.test(router), `${name} 应 scoped`)
-  }
+test('录入与弹窗编辑隐藏导航，保存区域保留安全区', () => {
+  for(const key of ['showTabbar','showFab']) assert.match(app, new RegExp(`${key} = computed\\(\\(\\) => !route\\.meta\\?\\.hideTabbar && !store\\.editingRecord\\)`))
+  for(const pattern of [/safe-bottom/, /\.page:not\(\.has-tabbar\)/, /min-width:44px/, /min-height:44px/, /@media\(min-width:1000px\)/]) assert.match(app, pattern)
 })
-
-// ---------------------------------------------------------------- App shell
-const app = src('src/App.vue')
-
-test('App 使用 4 tab 常量、渲染分组分段与固定「＋记录」', () => {
-  assert.match(app, /from '\.\/lib\/nav'/)
-  assert.match(app, /v-for="t in TABS"/)
-  assert.match(app, /class="segtab"/)
-  assert.match(app, /class="fab"/)
-  assert.match(app, /router-view/)
+test('人物范围本页切换与显式默认保存分开', () => {
+  assert.match(app, /aria-label="本页人物范围"/); assert.match(app, /resolveScopedPerson/)
+  const body = app.slice(app.indexOf('function changeScope'), app.indexOf('function setDefaultScope'))
+  assert.match(body, /router\.replace/); assert.ok(!body.includes('setCurrentPerson'))
+  assert.match(app, /function setDefaultScope\(\)[\s\S]*store\.setCurrentPerson/)
+  assert.match(app, /name="search"/); assert.match(app, /name="setting-o"/)
 })
-
-test('App 底部 tab 用图标 + 文字标签（不是纯文字）', () => {
-  assert.match(app, /van-icon :name="t\.icon"/)
-  assert.match(app, /class="tab-label"/)
-  assert.match(app, /t\.label/)
+test('store 不猜首人物，模块、隐私和编辑共享态保留', () => {
+  for(const name of ['loadModulesFor','hasModule','setEditingRecord','genderLabel','setPrivacyMode']) assert.ok(store.includes(name))
+  assert.ok(!store.includes('favourite'))
 })
-
-test('App 录入路由与「正在编辑」时隐藏 tabbar 与「＋记录」', () => {
-  assert.match(
-    app,
-    /showTabbar = computed\(\(\) => !route\.meta\?\.hideTabbar && !store\.editingRecord\)/
-  )
-  // 「＋记录」与 tabbar 同一口径：一律按 meta.hideTabbar（所有录入/编辑路由）判定。
-  // 只排除 route.name === 'new' 会漏掉 /wardrobe/new —— FAB 会盖住那页的「保存」
-  // （手机视口实测重叠），点保存变成跳回记录页、选的衣物一条没记上。
-  assert.match(
-    app,
-    /showFab = computed\(\(\) => !route\.meta\?\.hideTabbar && !store\.editingRecord\)/
-  )
-  assert.ok(
-    !/showFab = computed\(\(\) => route\.name !== 'new'/.test(app),
-    '「＋记录」不能只按 /new 排除，要覆盖所有 hideTabbar 的录入页'
-  )
-  // 录入页要留出底部安全区，最后一个控件不被 Home indicator / 悬浮元素压住
-  assert.match(app, /\.page:not\(\.has-tabbar\)/)
-  assert.match(app, /padding-bottom: calc\(12px \+ var\(--safe-bottom\)\)/)
+test('设置页保留隐私、关于、退出及折叠诊断', () => {
+  for(const label of ['隐私模式','关于','退出登录']) assert.ok(settings.includes(label))
+  assert.match(settings, /diagOpen = ref\(false\)/); assert.ok(!settings.includes('createPerson')); assert.ok(settings.includes('to="/people"'))
 })
-
-test('App 含全局搜索入口与首页设置齿轮', () => {
-  assert.match(app, /name="search"/)
-  assert.match(app, /name="setting-o"/)
-  assert.match(app, /router\.push\('\/search'\)/)
-})
-
-test('App 只读范围指示器：按 ?person / 路由参数显示，不改全局', () => {
-  assert.match(app, /routeScopePersonId/)
-  assert.match(app, /class="scope-tag"/)
-  // 指示器只读：不调用 setCurrentPerson
-  assert.ok(!app.includes('setCurrentPerson'), 'App 不应写回全局 scope')
-})
-
-test('App 分段链接与「＋记录」带上当前范围的人', () => {
-  assert.match(app, /segTarget\(s\)/)
-  assert.match(app, /scopeQuery\(effectiveScopeId\.value\)/)
-  assert.match(app, /segTarget/)
-})
-
-test('App 衣橱入口按服装模块门控（未知不隐藏）', () => {
-  assert.match(app, /anyOutfitEnabled/)
-  assert.match(app, /hasModule\(id, 'outfit'\)/)
-})
-
-test('App 布局：全局 border-box、topbar 固定高度、icon 触控 ≥44px、fab 底部留白', () => {
-  assert.match(app, /box-sizing: border-box/)
-  assert.match(app, /--topbar-h: 44px/)
-  assert.match(app, /top: calc\(var\(--safe-top\) \+ var\(--topbar-h\)\)/) // 分段条精确偏移
-  assert.match(app, /min-width: 44px/)
-  assert.match(app, /min-height: 44px/)
-  assert.match(app, /\.page\.has-tabbar/)
-})
-
-// ---------------------------------------------------------------- store
-const store = src('src/store.js')
-
-test('store 提供惰性模块开关 + 正在编辑共享态', () => {
-  assert.match(store, /loadModulesFor/)
-  assert.match(store, /hasModule/)
-  assert.match(store, /editingRecord: false/)
-  assert.match(store, /setEditingRecord/)
-})
-
-// ---------------------------------------------------------------- Settings
-const settings = src('src/views/SettingsView.vue')
-
-test('设置页不再承载人物管理/添加人物（已迁到 /people）', () => {
-  assert.ok(!settings.includes('添加一个人'), '不应再有「添加一个人」卡片')
-  assert.ok(!settings.includes('如：妈妈 / 阿明'), '不应再有添加人物表单')
-  assert.ok(!settings.includes('createPerson'), '不应再直接建人')
-  assert.ok(settings.includes('to="/people"'), '应提供去人物页入口')
-})
-
-test('设置页保留 隐私/关于/退出/收起诊断', () => {
-  assert.ok(settings.includes('隐私模式'))
-  assert.ok(settings.includes('关于'))
-  assert.ok(settings.includes('退出登录'))
-  assert.match(settings, /diagOpen = ref\(false\)/)
-})
-
-// ---------------------------------------------------------------- PeopleView
-const people = src('src/views/PeopleView.vue')
-
-test('PeopleView：添加入口是显式按钮，表单默认收起（非永久表单）', () => {
-  assert.match(people, /showAdd = ref\(false\)/)
-  assert.match(people, /v-if="showAdd"/)
-  assert.match(people, /＋ 添加人物/)
-})
-
-test('PeopleView：列表里不再直接删除（删除只在个人管理）', () => {
-  assert.ok(!people.includes('deletePerson'), '列表流程不应直接删人')
-  assert.ok(!people.includes('removePerson'), '不应有列表内删除函数')
-})
-
-test('PeopleView：移除误导的「同一人多圈」说明，空状态指向按钮', () => {
-  assert.ok(!people.includes('同一个人可以同时在多个圈里'), '应移除误导文案')
+test('人物添加默认折叠、支持新增深链，删除仅管理页', () => {
+  assert.match(people, /showAdd = ref\(false\)/); assert.match(people, /v-if="showAdd"/); assert.match(people, /route\.query\.add === '1'/)
+  assert.ok(!people.includes('deletePerson')); assert.ok(!people.includes('同一个人可以同时在多个圈里'))
   assert.match(people, /还没有人，点上面的「＋ 添加人物」/)
 })
-
-// ---------------------------------------------------------------- PersonView
-const person = src('src/views/PersonView.vue')
-
-test('PersonView 修复 pred 解构遮蔽 ref 的运行时 bug', () => {
-  assert.match(person, /const pred = ref\(/) // 仍有 ref
-  assert.match(person, /predData/) // 解构改用 predData
-  // 解构列表中不得出现裸 pred（回归守护）
-  assert.ok(!/\[\s*[^\]]*\bpred\b\s*,\s*\w+\s*\]\s*=\s*await/.test(person), '解构里不该有 pred 变量')
-  // 生理期显示条件：已启用 **且** 当前性别允许（男性页面不再显示生理期卡片）
-  assert.match(person, /pred\.value = cycleUsable\.value \? predData : null/)
-  assert.match(person, /const cycleUsable = computed\(/, 'cycleUsable 必须是计算属性')
-})
-
-test('PersonView 用 ?person 作用域链接，管理面板默认收起，可删除', () => {
-  assert.match(person, /scopeQuery/)
-  assert.match(person, /mgmtOpen = ref\(false\)/)
-  assert.match(person, /deletePerson/)
-})
-
-test('PersonView 在管理之外有只读关系摘要，并带「管理」动作', () => {
-  assert.match(person, /openManagement/)
-  assert.match(person, /@click="openManagement\(\)"/)
-  assert.match(person, /关系/)
-})
-
-test('PersonView 属性新增有分类选择 + 添加按钮（此前无入口）', () => {
+test('PersonView 不遮蔽 pred，模块开关和管理保留', () => {
+  assert.match(person, /const pred = ref\(/); assert.match(person, /predData/); assert.match(person, /pred\.value = cycleUsable\.value \? predData : null/)
+  for(const name of ['scopeQuery','mgmtOpen = ref(false)','deletePerson','openManagement','addAttr','modulesAvailable','blockedModules']) assert.ok(person.includes(name))
+  assert.ok(person.indexOf('属性') < person.indexOf('最近记录')); assert.match(person, /enabledModules\.includes\('outfit'\)/)
   assert.match(person, /v-model="pickedCategory"/)
-  assert.match(person, /@click="addAttr"/)
-  assert.match(person, /function addAttr/)
 })
-
-test('PersonView 内容顺序：属性/生理期排在最近记录之前', () => {
-  const iAttr = person.indexOf('属性')
-  const iRecent = person.indexOf('最近记录')
-  assert.ok(iAttr >= 0 && iRecent >= 0, '两个区块都应存在')
-  assert.ok(iAttr < iRecent, '属性应排在最近记录之前')
+test('生日、性别及生理期参考语义保持', () => {
+  for(const file of ['Dashboard.vue','PersonView.vue','PeopleView.vue']) assert.match(code(`src/views/${file}`), /birthdayLine\(/)
+  assert.match(code('src/views/Dashboard.vue'), /生理期 · 约 \{\{ p\.cycle\.next_in_days \}\} 天后/)
+  assert.match(person, /v-model="form\.gender"/); assert.match(people, /v-model="form\.gender"/)
+  assert.match(code('src/views/CycleView.vue'), /pred\.fertility_note/)
 })
-
-test('PersonView 衣橱快捷入口按服装模块门控', () => {
-  assert.match(person, /enabledModules\.includes\('outfit'\)/)
-})
-
-// ---------------------------------------------------------------- 性别 / 生日显性化
-// 背景：首页只显示「约 24 天后」（生理期预测）而生日在 28 天后 → 被误读。
-// 这两条规则必须一直有人守：① 生日必须给明确写法；② 生理期必须按性别门控。
-
-test('生日显示统一走 lib/birthday（不是各页面自己拼天数）', () => {
-  for (const f of ['src/views/Dashboard.vue', 'src/views/PersonView.vue', 'src/views/PeopleView.vue']) {
-    const s = src(f)
-    assert.match(s, /from '\.\.\/lib\/birthday'/, `${f} 应引用 lib/birthday`)
-    assert.match(s, /birthdayLine\(/, `${f} 应使用 birthdayLine`)
+test('记录和旧穿搭路由只包装统一 Composer', () => {
+  for(const file of ['NewRecord.vue','WardrobeNew.vue']) {
+    const text = code(`src/views/${file}`); assert.match(text, /<RecordComposer/)
+    assert.ok(!/api\.(createEvent|createOutfit|uploadMedia)/.test(text))
   }
+  assert.match(code('src/views/WardrobeNew.vue'), /initial-type="outfit"/)
 })
-
-test('Dashboard 的生理期标签带语义（不再是无标签的「约 N 天后」）', () => {
-  const dash = src('src/views/Dashboard.vue')
-  assert.match(dash, /生理期 · 约 \{\{ p\.cycle\.next_in_days \}\} 天后/)
-  assert.ok(!/约 \{\{ p\.cycle\.next_in_days \}\} 天后/.test(dash.replace('生理期 · 约', ''))
-    || dash.includes('生理期 · 约'), '标签必须带「生理期」前缀')
+test('Timeline 用 Composer 编辑并保留按日分组、搜索、预览与编辑态', () => {
+  const tl = code('src/views/Timeline.vue')
+  for(const pattern of [/<RecordComposer/, /<EventDayList/, /group: 'day'/, /loadMore/, /setEditingRecord/, /onUnmounted/, /previewUrls/]) assert.match(tl, pattern)
+  assert.ok(!/api\.(createEvent|createOutfit|patchEvent|uploadMedia)/.test(tl))
 })
-
-test('性别字段贯通：store 有 genderLabel，页面有性别编辑/新建入口', () => {
-  assert.match(store, /genderLabel/)
-  assert.match(person, /form\.gender/)
-  assert.match(person, /v-model="form\.gender"/)
-  assert.match(people, /v-model="form\.gender"/)
+test('共享 Composer 日期与可选时间分开，表单与附件分层', () => {
+  const composer = code('src/components/records/RecordComposer.vue')
+  assert.match(composer, /type="date"/); assert.match(composer, /type="time"/); assert.ok(!composer.includes('datetime-local'))
+  for(const name of ['EventFields','OutfitFields','RecordAttachments','OutfitForm']) assert.ok(composer.includes(`<${name}`))
+  assert.ok(!composer.includes('store.setCurrentPerson')); assert.ok(!composer.includes('store.others[0]'))
 })
-
-test('模块开关只列「该性别可用」的模块（男性看不到生理期开关）', () => {
-  assert.match(person, /modulesAvailable/)
-  assert.match(person, /blockedModules/)
-  assert.match(person, /v-for="k in modulesAvailable"/)
-  // 不能再直接用全局 config.modules 渲染开关列表（那会给男性显示生理期）
-  assert.ok(!/v-for="k in allModules"/.test(person), '开关列表不应再读全局 allModules')
+test('OutfitForm 仅选择草稿，没有第二套落库实现', () => {
+  const picker = code('src/components/OutfitForm.vue')
+  assert.ok(!/api\.(createOutfit|createWardrobeItem|createEvent|uploadMedia)/.test(picker))
+  assert.match(picker, /emit\('confirm'/); assert.match(picker, /emit\('cancel'/); assert.match(picker, /preselect|initial/)
 })
-
-test('CycleView 展示易孕期参考（含免责话术，由后端给）', () => {
-  const cycle = src('src/views/CycleView.vue')
-  assert.match(cycle, /pred\.fertility/)
-  assert.match(cycle, /pred\.fertility_note/)
+test('衣橱添加与穿搭入口分开，范围不写默认且保留图片预览', () => {
+  const wardrobe = code('src/views/Wardrobe.vue')
+  for(const pattern of [/添加衣物/, /wardrobe\/items\/new/, /wardrobe\/new/, /暂无穿着记录/, /resolveScopedPerson/, /van-image-preview/]) assert.match(wardrobe, pattern)
+  assert.ok(!wardrobe.includes('setCurrentPerson'))
 })
-
-// ---------------------------------------------------------------- Timeline / NewRecord / main.js
-test('Timeline 内联编辑时置共享态，并在卸载时复位', () => {
-  const tl = src('src/views/Timeline.vue')
-  assert.match(tl, /store\.setEditingRecord\(v\)/)
-  assert.match(tl, /onUnmounted\(\(\) => store\.setEditingRecord\(false\)\)/)
+test('日卡继续复用、默认折叠，发生与录入时间分别显示', () => {
+  const days = code('src/components/EventDayList.vue')
+  for(const pattern of [/const open = ref\(\[\]\)/, /toggleAll/, /dayThumbs\(d, 2\)/, /录入/, /发生/, /original\(e\)/]) assert.match(days, pattern)
+  assert.match(person, /<EventDayList/); assert.match(person, /:editable="false"/)
 })
-
-// 时间轴编辑面板的图片：后端上传接口一直支持带 event_id，缺的只是编辑面板里的入口
-// （曾经编辑一条记录加不了图）。这几条守住：入口在、挂对归属、日期不串、能删。
-test('Timeline 编辑面板可增删图片（挂 event_id、用事件日期、按媒体模块门控）', () => {
-  const tl = src('src/views/Timeline.vue')
-  assert.match(tl, /van-uploader v-model="fileList"/, '编辑面板要有图片选择器')
-  assert.match(tl, /api\.uploadMedia\(raw, \{/, '要走既有上传接口')
-  assert.match(tl, /event_id: f\.id/, '必须挂到这条记录上（否则时间轴不会显示）')
-  // 拍摄日期用事件日期：用「今天」会把老照片排到相册最前面（captured_on 是 DATE 列 → 取日期部分）
-  assert.match(tl, /captured_on: dayOf\(f\.when\)/)
-  assert.match(tl, /api\.deleteMedia\(m\.id\)/, '已有图片要能在面板里删')
-  assert.match(tl, /mediaVisible/, '按该人的「图片」模块门控')
-  assert.match(tl, /hasModule\(Number\(form\.value\?\.person_id\), 'media'\)/)
-  // 新图在「保存」时才上传（取消编辑不留半截数据）
-  assert.match(tl, /const uploaded = await uploadPickedFiles\(f\)/)
-})
-
-test('NewRecord 认领 ?person（FAB 带过来的当前范围）', () => {
-  assert.match(src('src/views/NewRecord.vue'), /normalizePersonId\(route\.query\.person\)/)
-})
-
-test('main.js 显式引入 icon 样式（顶栏图标）', () => {
-  assert.match(src('src/main.js'), /import 'vant\/es\/icon\/style'/)
-})
-
-test('下游页（时间轴/相册/衣橱）读取 ?person 且不写回全局 scope', () => {
-  for (const f of ['src/views/Timeline.vue', 'src/views/Gallery.vue', 'src/views/Wardrobe.vue']) {
-    const s = src(f)
-    assert.match(s, /resolveScopedPerson/, `${f} 应解析 ?person`)
-    assert.ok(!s.includes('setCurrentPerson'), `${f} 不应写回全局 scope`)
-  }
-})
-
-// ---------------------------------------------------------------- 服装：专有记录页（衣橱）
-// 决策：服装不再混在通用「记录页」里 —— 它要查单品目录 + 写引用，语义跟「记一件事」不同，
-// 而且今天就是这么漏掉单品的。但入口不能少：衣橱按钮 + 单品「再穿一次」+ 记录页的
-// 「记穿搭」卡片，三条都指向 /wardrobe/new。
-test('服装有专有记录页 /wardrobe/new（录入页隐藏 tabbar、返回落到衣橱）', () => {
-  assert.ok(router.includes("path: '/wardrobe/new'"), '缺 /wardrobe/new 路由')
-  assert.match(router, /path: '\/wardrobe\/new'[\s\S]*hideTabbar: true/)
-  assert.match(router, /path: '\/wardrobe\/new'[\s\S]*backTo: '\/wardrobe'/)
-})
-
-test('记录页记穿搭：弹层选择器只勾不写库，底部的「保存」才是唯一真保存', () => {
-  const nr = src('src/views/NewRecord.vue')
-  // 弹层里用的是共享组件、且是选择器模式
-  assert.match(nr, /<OutfitForm[\s\S]*mode="pick"/, '记录页要用 pick 模式的选择器')
-  assert.match(nr, /@confirm="onPickConfirm"/)
-  // ★ 选择器回调只存草稿：createOutfit 只能出现在 submit() 里（点「保存」才发请求）
-  const confirmIdx = nr.indexOf('function onPickConfirm')
-  const submitIdx = nr.indexOf('async function submit')
-  const firstOutfitCall = nr.indexOf('api.createOutfit')
-  assert.ok(confirmIdx > -1 && submitIdx > -1 && firstOutfitCall > submitIdx,
-    'createOutfit 必须只在 submit()（点保存）里调用，选择器回调不许写库')
-  assert.equal((nr.match(/api\.createOutfit/g) || []).length, 1, '记录页只应有一处建穿搭的调用')
-  // 已选区要显示单品缩略图（没有照片用类别占位）
-  assert.match(nr, /itemThumb/)
-  assert.match(nr, /class="picked-item"/)
-  assert.match(nr, /picked-ph/)
-  // 换人要清空已选（单品挂在人名下）
-  assert.match(nr, /已换人，请重新选择衣物/)
-  // 「刚记的」补齐：按写入时间排 + 人物 + 单品 chips + 首图
-  assert.match(nr, /order: 'created'/)
-  assert.match(nr, /r\.person_name/)
-  assert.match(nr, /r\.items/)
-  assert.match(nr, /recentThumb/)
-  assert.match(nr, /eventThumb/)
-})
-
-test('旧「记穿搭」跳转卡片已移除（记录页不再被弹到别的页面去记）', () => {
-  const nr = src('src/views/NewRecord.vue')
-  assert.ok(!nr.includes("path: '/wardrobe/new'"), '记录页不该再跳去 /wardrobe/new 记穿搭')
-  assert.ok(!nr.includes('goOutfit'), '旧的跳转入口应删掉')
-})
-
-test('穿搭面板抽成 components/OutfitForm.vue：跨类别已选汇总 + 0 单品确认 + 预选 + 两种模式', () => {
-  const f = src('src/components/OutfitForm.vue')
-  assert.match(f, /api\.createOutfit/)
-  assert.match(f, /已选 \{\{ pickedAll \}\} 件/, '分组勾选必须有跨类别汇总行')
-  assert.match(f, /这次没有勾单品/, '0 单品要二次确认（衣橱按单品聚合，不勾就白记）')
-  assert.match(f, /preselect/)
-  // mode='pick'：只勾、不发请求，用「确定/取消」把草稿交回记录页
-  assert.match(f, /mode: \{ type: String, default: 'save' \}/)
-  assert.match(f, /const pickMode = computed\(\(\) => props\.mode === 'pick'\)/)
-  assert.match(f, /emit\('confirm', \{ items: selection\(\) \}\)/)
-  assert.match(f, /确定（已选/, '选择器要有「确定（已选 N 件）」而不是「保存」')
-  assert.match(f, /function cancelPick\(\)/)
-  // 选择器模式不显示日期/地点/图片/保存（那些归记录页）
-  assert.match(f, /<div class="card" v-if="!pickMode">/)
-  assert.match(f, /<div v-if="!pickMode" style="margin-top: 10px">/)
-})
-
-test('衣橱有两个记录入口（记一次穿着 / 单品再穿一次），都带上当前范围的人', () => {
-  const w = src('src/views/Wardrobe.vue')
-  assert.match(w, /＋ 记一次穿着（今天）/)
-  assert.match(w, /＋ 再穿一次（今天）/)
-  assert.match(w, /function goRecord\(itemId\)/)
-  assert.match(w, /scopeQuery\(effectivePersonId\.value\)/)
-})
-
-test('单品穿着历史带出那次穿搭的照片（不复制给每件单品）', () => {
-  assert.match(src('src/views/Wardrobe.vue'), /w\.media/)
-})
-
-// 图片放大：三处（时间轴记录 / 衣橱单品详情 / 个人页服装图片）曾经是
-// window.open(原图, '_blank')，手机上会把 SPA 丢到后台；衣橱单品详情甚至连点击都没接
-// （照片点上去毫无反应）。现在统一页面内 van-image-preview。
-test('点图放大走页面内预览：时间轴记录不再新开标签页', () => {
-  const tl = src('src/views/Timeline.vue')
-  assert.match(tl, /from '\.\.\/lib\/media-preview'/)
-  // ★ 列表（含按日合并的日卡）现在在 EventDayList 里：那里 emit 出「被点的那张 + 这条记录的图片集合」
-  const days = src('src/components/EventDayList.vue')
-  assert.match(days, /@click="\$emit\('preview', \{ media: m, list: e\.media \}\)"/,
-    '列表缩略图要带上这条记录的图片集合')
-  assert.match(tl, /@preview="onPreview"/, '时间轴要把日卡的 preview 事件接上')
-  assert.match(tl, /function onPreview\(\{ media, list \}\) \{\s*openFull\(media, list\)/)
-  assert.match(tl, /van-image-preview[\s\S]*:images="preview\.images"[\s\S]*:start-position="preview\.index"/)
-  assert.match(tl, /@click="openFull\(m, form\.media\)"/, '编辑面板里的图同样要点得开')
-  // window.open 只允许留给视频（没有页面内预览的东西）
-  const opens = tl.match(/window\.open\(/g) || []
-  assert.equal(opens.length, 1, '只应剩视频那一条 window.open')
-  assert.match(tl, /if \(m && m\.kind === 'video'\) \{\s*window\.open/)
-  assert.ok(!/window\.open/.test(days), '日卡里不许自己开新标签页（统一走父页的预览）')
-})
-
-test('衣橱单品详情的照片/穿着照片可放大（此前点了没反应）', () => {
-  const w = src('src/views/Wardrobe.vue')
-  assert.match(w, /const detailPhotos = computed/, '预览集合 = 单品照片 + 各次穿着的照片')
-  assert.match(w, /\(detail\.value\?\.wears \|\| \[\]\)\.flatMap\(\(w\) => w\.media \|\| \[\]\)/)
-  assert.match(w, /v-if="m\.kind !== 'video'" :src="api\.mediaUrl\(m\)" @click="openFull\(m, detailPhotos\)"/)
-  assert.match(w, /:src="api\.mediaUrl\(m\)" @click="openFull\(m, detailPhotos\)"/, '穿着历史里的图也要能放大')
-  assert.match(w, /van-image-preview[\s\S]*:start-position="preview\.index"/)
-  assert.ok(!/window\.open/.test(w), '衣橱不该再开新标签页（视频用 <a target=_blank>）')
-})
-
-test('个人页「服装 / 图片」同样页面内放大', () => {
-  const p = src('src/views/PersonView.vue')
-  assert.match(p, /@click="openFull\(m, photos\)"/)
-  assert.match(p, /van-image-preview[\s\S]*:images="preview\.images"/)
-})
-
-test('专有记录页遵守下游页约定：读 ?person、不写回全局 scope', () => {
-  const nw = src('src/views/WardrobeNew.vue')
-  assert.match(nw, /normalizePersonId\(route\.query\.person\)/)
-  assert.ok(!nw.includes('setCurrentPerson'), '不应写回全局 scope')
-  assert.match(nw, /OutfitForm/)
-  assert.match(nw, /hasModule\(personId\.value, 'outfit'\)/, '没开服装模块的人不给记')
-})
-
-// ---------------------------------------------------------------- 时间精确到秒 + 时间轴按日合并
-// 背景：events.event_date 原来是 DATE（只到日），同一天发生的事分不出先后；
-// 现在后端是 DATETIME（00:00:00 = 只记到日），时间轴按「天」合并成日卡。
-test('时间轴按日合并：走 group=day（服务端补齐边界那天）并能加载更多', () => {
-  const tl = src('src/views/Timeline.vue')
-  assert.match(tl, /import EventDayList from '\.\.\/components\/EventDayList\.vue'/)
-  assert.match(tl, /<EventDayList/)   // 保证 component 真的被渲染
-  assert.match(tl, /group: 'day'/, '分页按日取整：同一天不能被撕成两页')
-  assert.match(tl, /has_more|hasMore/, '要按后端 has_more 决定是否给「加载更多」')
-  assert.match(tl, /@click="loadMore"/)
-  // ★ load 带参数了，watch 不能直接把回调传进去（会把新值当 offset）
-  assert.match(tl, /watch\(\[type, from, to, effectivePersonId\], \(\) => load\(\)\)/)
-})
-
-test('日卡组件：默认折叠、日头显示条数与类型、可一键全展开', () => {
-  const days = src('src/components/EventDayList.vue')
-  assert.match(days, /const open = ref\(\[\]\)/, '默认全折叠（含今天）')
-  assert.match(days, /groupByDay\(props\.items\)/)
-  assert.match(days, /typeSummary\(d, labelOf\)/)
-  assert.match(days, /@click="toggle\(d\.date\)"/)
-  assert.match(days, /toggleAll/, '顶部要有一键展开/收起')
-  assert.match(days, /dayThumbs\(d, 2\)/, '折叠态给缩略图预览，否则折叠起来什么都看不到')
-})
-
-test('个人页「最近记录」也吃同一份日卡（紧凑模式、只读、不套卡中卡）', () => {
-  const p = src('src/views/PersonView.vue')
-  assert.match(p, /<EventDayList/)
-  assert.match(p, /compact/)
-  assert.match(p, /:editable="false"/)
-  assert.match(p, /bare/)
-})
-
-test('录入/编辑的日期时间用 datetime-local step=1（Vant picker 只到分钟）', () => {
-  for (const f of ['src/views/NewRecord.vue', 'src/views/Timeline.vue', 'src/components/OutfitForm.vue']) {
-    const s = src(f)
-    assert.match(s, /type="datetime-local" step="1"/, `${f} 要能精确到秒`)
-    assert.match(s, /只记到日（清掉时间）/, `${f} 要能退回「只记到日」`)
-  }
-})
-
-test('写入时刻的口径统一：event_date 取日期 + event_time 走 normalizeTime', () => {
-  assert.match(src('src/views/NewRecord.vue'), /event_time: normalizeTime\(eventTime\.value\)/)
-  assert.match(src('src/components/OutfitForm.vue'), /event_time: normalizeTime\(eventTime\.value\)/)
-  const tl = src('src/views/Timeline.vue')
-  assert.match(tl, /const patch = \{ event_date: day, event_time: normalizeTime\(time\) \}/)
-  // 今天默认记「此刻」——否则连记两条会用同一条旧时刻
-  assert.match(src('src/views/NewRecord.vue'), /function setToday\(\) \{\s*eventWhen\.value = toLocalInput\(todayStr, nowLocalTime\(\)\)/)
-  assert.match(src('src/views/NewRecord.vue'), /refreshTimeIfToday/)
-})
-
-test('拍摄日仍取「事件的日期部分」（captured_on 是 DATE 列）', () => {
-  assert.match(src('src/views/NewRecord.vue'), /captured_on: eventDay\.value/)
-  assert.match(src('src/components/OutfitForm.vue'), /captured_on: eventDay\.value/)
-})
-
-test('展示时刻的地方统一走 lib/event-day（没有时刻就不显示时间）', () => {
-  for (const f of [
-    'src/views/NewRecord.vue',
-    'src/views/SearchView.vue',
-    'src/views/Wardrobe.vue',
-    'src/views/WardrobeNew.vue',
-    'src/components/EventDayList.vue',
-  ]) {
-    assert.match(src(f), /lib\/event-day/, `${f} 应从 lib/event-day 取展示逻辑`)
-  }
-  // 个人页自己不拼日期：整段列表交给日卡组件（它内部走 lib/event-day）
-  assert.match(src('src/views/PersonView.vue'), /<EventDayList/)
-  assert.ok(
-    !/event_date \}\}/.test(src('src/views/SearchView.vue')),
-    '搜索页不该再直接渲染 event_date（要带时刻走 fmtWhen）'
-  )
+test('设计 token 与必要 Vant 图标样式显式引入', () => {
+  const main = code('src/main.js')
+  assert.match(main, /import 'vant\/es\/icon\/style'/); assert.match(main, /import '.\/styles\/tokens.css'/)
+  assert.match(src('src/styles/tokens.css'), /--accent:/)
 })

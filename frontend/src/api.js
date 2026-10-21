@@ -19,8 +19,9 @@ export function setToken(v) {
   }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, idempotencyKey) {
   const headers = {}
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
   const token = getToken()
   if (token) headers['X-Archive-Token'] = token
   // FormData 交给浏览器自己设 Content-Type（含 boundary），手写会坏掉上传
@@ -90,7 +91,7 @@ export const api = {
     )
     return request('GET', '/api/events?' + q.toString())
   },
-  createEvent: (e) => request('POST', '/api/events', e),
+  createEvent: (e, key) => request('POST', '/api/events', e, key),
   patchEvent: (id, e) => request('PATCH', `/api/events/${id}`, e),
   deleteEvent: (id) => request('DELETE', `/api/events/${id}`),
 
@@ -139,7 +140,7 @@ export const api = {
     )
     return request('GET', '/api/wardrobe/items?' + q.toString())
   },
-  createWardrobeItem: (item) => request('POST', '/api/wardrobe/items', item),
+  createWardrobeItem: (item, key) => request('POST', '/api/wardrobe/items', item, key),
   wardrobeItem: (id) => request('GET', `/api/wardrobe/items/${id}`),
   patchWardrobeItem: (id, patch) => request('PATCH', `/api/wardrobe/items/${id}`, patch),
   deleteWardrobeItem: (id) => request('DELETE', `/api/wardrobe/items/${id}`),
@@ -148,7 +149,7 @@ export const api = {
   unmergeWardrobeItem: (id) => request('POST', `/api/wardrobe/items/${id}/unmerge`, {}),
   wardrobeDuplicates: (personId) =>
     request('GET', '/api/wardrobe/duplicates' + (personId ? `?person_id=${personId}` : '')),
-  createOutfit: (outfit) => request('POST', '/api/outfits', outfit),
+  createOutfit: (outfit, key) => request('POST', '/api/outfits', outfit, key),
   outfit: (eventId) => request('GET', `/api/outfits/${eventId}`),
   removeWear: (eventId, itemId) => request('DELETE', `/api/outfits/${eventId}/items/${itemId}`),
 
@@ -166,7 +167,7 @@ export const api = {
     if (opts.event_id) fd.append('event_id', opts.event_id)
     if (opts.wardrobe_item_id) fd.append('wardrobe_item_id', opts.wardrobe_item_id)
     if (opts.captured_on) fd.append('captured_on', opts.captured_on)
-    return request('POST', '/api/media', fd)
+    return request('POST', '/api/media', fd, opts.idempotency_key)
   },
   deleteMedia: (id) => request('DELETE', `/api/media/${id}`),
   storage: () => request('GET', '/api/media/storage'),

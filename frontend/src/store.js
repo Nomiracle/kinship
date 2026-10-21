@@ -153,11 +153,7 @@ export const useArchiveStore = defineStore('archive', {
     },
     async loadPersons() {
       this.persons = await api.persons()
-      // 只有"从没选过"才自动挑一个；主动选了「全部」就不能被覆盖（否则刷新又跳回某个人）
-      if (!this.personChosen && this.persons.length) {
-        const favourite = this.persons.find((p) => !p.is_self) || this.persons[0]
-        this.setCurrentPerson(favourite.id)
-      }
+      // 未设默认人物时保持全部；创建表单必须显式选择归属，不猜第一个人物。
       writeCache(CACHE_PERSONS, this.persons)
     },
     // 先把上次的 config/persons 摆上屏幕（同步、0 往返），后面 bootstrap 会回源刷新。

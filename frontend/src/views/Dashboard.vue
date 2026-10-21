@@ -1,35 +1,18 @@
 <template>
   <div>
-    <!-- 全站唯一的人物切换点（紧凑：默认收起，点开才展开 chips） -->
-    <div class="card" v-if="personList.length">
-      <div class="row" style="padding: 0">
-        <span class="muted">看谁的</span>
-        <span class="scope-row">
-          <strong>{{ store.scopeLabel }}</strong>
-          <button class="iconbtn" :aria-label="scopeOpen ? '收起' : '切换'" @click="scopeOpen = !scopeOpen">
-            <van-icon :name="scopeOpen ? 'arrow-up' : 'arrow-down'" />
-          </button>
-        </span>
-      </div>
-      <div v-if="scopeOpen" class="chips" style="margin-top: 8px">
-        <van-tag :type="store.isAll ? 'primary' : 'default'" size="large" @click="pick(null)">
-          全部
-        </van-tag>
-        <van-tag
-          v-for="p in personList"
-          :key="p.id"
-          :type="store.currentPersonId === p.id ? 'primary' : 'default'"
-          size="large"
-          @click="pick(p.id)"
-        >
-          {{ store.displayName(p) }}
-        </van-tag>
-      </div>
-      <p class="muted" style="margin: 8px 0 0">
-        <template v-if="store.isAll">当前「全部」：时间轴 / 待办 / 相册都显示所有人</template>
-        <template v-else>当前只看「{{ store.scopeLabel }}」；点上面的箭头可切换</template>
-      </p>
-    </div>
+    <section class="quick-actions" aria-label="快捷新增">
+      <router-link :to="scopedLink('/new')">✎ 记一件事</router-link>
+      <router-link :to="scopedLink('/wardrobe/items/new')">＋ 添加衣物</router-link>
+      <router-link :to="scopedLink('/wardrobe/new')">◷ 记穿搭</router-link>
+      <router-link :to="scopedLink('/todos')">☑ 待办</router-link>
+    </section>
+    <section class="card" v-if="recent.length">
+      <h3>近期记录</h3>
+      <router-link v-for="r in recent" :key="r.id" class="recent-row" :to="scopedLink('/timeline')">
+        <span><strong>{{ maskedTitle(r) }}</strong><small>{{ personName(r.person_id) }}</small></span>
+        <time>{{ fmtWhen(r) }}</time>
+      </router-link>
+    </section>
 
     <!-- 1) 日期 -->
     <div class="card" v-if="today">
@@ -92,7 +75,7 @@
         <span class="muted">7 天内到期 {{ todoBuckets.soon.length }} 条</span>
       </div>
       <p class="muted" style="margin: 6px 0 0">
-        <router-link to="/todos" class="link">去待办池 →</router-link>
+        <router-link :to="scopedLink('/todos')" class="link">去待办池 →</router-link>
       </p>
     </div>
 
@@ -102,7 +85,7 @@
       <div class="row" v-for="p in attention" :key="p.id">
         <div>
           <router-link :to="'/person/' + p.id" class="name">
-            <strong>{{ p.is_self ? '我' : p.display_name }}</strong>
+            <strong>{{ store.displayName(p) }}</strong>
           </router-link>
           <span class="muted" style="margin-left: 6px">{{ store.relationLabel(p.relation_type) }}</span>
           <div class="muted">
@@ -136,7 +119,7 @@
           <div class="row" v-for="p in others" :key="p.id">
             <div>
               <router-link :to="'/person/' + p.id" class="name">
-                <strong>{{ p.is_self ? '我' : p.display_name }}</strong>
+                <strong>{{ store.displayName(p) }}</strong>
               </router-link>
               <span class="muted" style="margin-left: 6px">{{ store.relationLabel(p.relation_type) }}</span>
               <div class="muted" v-if="p.birthday_text">{{ birthdayLine(p) }}</div>
@@ -163,15 +146,24 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { showToast } from 'vant'
+import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useArchiveStore } from '../store'
 import { buildReminders, splitPeopleByAttention, triageTodos } from '../lib/dashboard'
 import { birthdayLine, birthdaySoon } from '../lib/birthday'
+import { resolveScopedPerson } from '../lib/scope'
+import { fmtWhen } from '../lib/event-day'
 
 const store = useArchiveStore()
+const route = useRoute()
+const effectivePersonId = computed(() => resolveScopedPerson(route.query.person, store.currentPersonId))
+const recent = ref([])
+function scopedLink(path) { return { path, query: { person: effectivePersonId.value || 'all' } } }
+function personName(id) { return store.displayName(store.persons.find(p => p.id === id)) }
+function maskedTitle(r) { return store.privacyMode && r.sensitivity === 'sensitive' ? '●●●' : r.title || r.body?.slice(0,40) || '（无内容）' }
 const today = ref(null)
 const personList = computed(() => store.persons)
-const scopeOpen = ref(false)
+
 const othersOpen = ref(false)
 const todos = ref([])
 const completingIds = ref(new Set())
@@ -207,15 +199,17 @@ function fmtDate(s) {
 let loadVersion = 0
 async function load() {
   const version = ++loadVersion
-  const pid = store.currentPersonId
+  const pid = effectivePersonId.value
   // 并发：今天卡片 + 未完成待办互不依赖（慢链路上少一个往返）
-  const [t, td] = await Promise.all([
+  const [t, td, records] = await Promise.all([
     api.today(pid || undefined),
     api.todos(pid || undefined).catch(() => []),
+    api.events({ person_id: pid || undefined, limit: 5 }),
   ])
   if (version !== loadVersion) return
   today.value = t
   todos.value = Array.isArray(td) ? td : []
+  recent.value = records.items || []
 }
 
 // 完成失败时撤回勾选并提示，不能让 UI 假装已经保存。
@@ -233,12 +227,7 @@ async function completeTodo(t, event) {
   }
 }
 
-function pick(id) {
-  store.setCurrentPerson(id)
-  scopeOpen.value = false
-}
-
-watch(() => store.currentPersonId, () => load().catch(() => showToast('加载失败，请重试')))
+watch(effectivePersonId, () => load().catch(() => showToast('加载失败，请重试')))
 onMounted(async () => {
   await store.ensureLoaded()
   await load()
@@ -246,6 +235,13 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.quick-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
+.quick-actions a { padding:18px 12px; background:var(--accent-soft); border-radius:var(--radius); text-decoration:none; color:var(--accent); font-weight:600; }
+.recent-row { display:flex; align-items:center; justify-content:space-between; padding:12px 0; gap:12px; text-decoration:none; color:var(--ink); border-top:1px solid var(--line); }
+.recent-row span { min-width:0; overflow-wrap:anywhere; }
+.recent-row small { display:block; color:var(--muted); margin-top:4px; }
+.recent-row time { flex-shrink:0; font-size:12px; color:var(--muted); }
+@media(min-width:800px) { .quick-actions { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 .scope-row {
   display: inline-flex;
   align-items: center;

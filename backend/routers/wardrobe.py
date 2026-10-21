@@ -12,7 +12,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ from ..schemas import (
 )
 from ..services import media as media_svc
 from ..services import wardrobe as wardrobe_svc
+from ..services import idempotency as idem_svc
 from ..services.audit import write_audit
 
 router = APIRouter(prefix="/api", tags=["wardrobe"], route_class=CommitRoute)
@@ -219,9 +221,21 @@ def get_item(item_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("/wardrobe/items", status_code=201)
-def create_item(payload: WardrobeItemIn, session: Session = Depends(get_session)):
+def create_item(payload: WardrobeItemIn, request: Request, session: Session = Depends(get_session)):
+    key = idem_svc.extract_key(request)
+    payload_hash = idem_svc.hash_payload(payload.model_dump(mode="json"))
+    claim = None
+    if key:
+        if not session.get(Person, payload.person_id):
+            raise HTTPException(404, "找不到这个人")
+        res = idem_svc.try_claim(session, key, "wardrobe_items", payload_hash)
+        if isinstance(res, JSONResponse):
+            return res
+        claim = res
     if not session.get(Person, payload.person_id):
         raise HTTPException(404, "找不到这个人")
+    # Shared owner lock also covers inline outfit item creation with other keys.
+    session.scalar(select(Person).where(Person.id == payload.person_id).with_for_update())
     color_key = wardrobe_svc.canonical_key(payload.color)
     name_key = wardrobe_svc.canonical_key(payload.name)
     # 防回潮：同人+同类别+同名+同色已经存在时明确报冲突，让前端问「复用吗」
@@ -229,7 +243,7 @@ def create_item(payload: WardrobeItemIn, session: Session = Depends(get_session)
         WardrobeItem.person_id == payload.person_id,
         WardrobeItem.category == payload.category,
         WardrobeItem.active.is_(True),
-    )):
+    ).with_for_update()):
         if (wardrobe_svc.canonical_key(row.name), wardrobe_svc.canonical_key(row.color)) == (name_key, color_key):
             raise HTTPException(409, detail={
                 "message": "已有同名同色单品，请复用或改名", "existing_id": row.id,
@@ -247,7 +261,10 @@ def create_item(payload: WardrobeItemIn, session: Session = Depends(get_session)
     session.add(item)
     session.flush()
     write_audit(session, "wardrobe_item", item.id, "create")
-    return _item_out(item, _names(session))
+    body = _item_out(item, _names(session))
+    if claim is not None:
+        idem_svc.complete_claim(session, claim, 201, body)
+    return body
 
 
 @router.patch("/wardrobe/items/{item_id}")
@@ -390,21 +407,39 @@ def get_outfit(event_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("/outfits", status_code=201)
-def create_outfit(payload: OutfitIn, session: Session = Depends(get_session)):
+def create_outfit(payload: OutfitIn, request: Request, session: Session = Depends(get_session)):
     """记一次穿搭：1 条事件 + N 个单品引用。
 
     单品写 name（而不是 item_id）时按唯一键**先查后建** —— 同一件被反复记录
     只会复用已有的那条，这是「重复」从源头消失的地方。
     """
+    key = idem_svc.extract_key(request)
+    payload_hash = idem_svc.hash_payload(payload.model_dump(mode="json"))
+    claim = None
+    if key:
+        if not session.get(Person, payload.person_id):
+            raise HTTPException(404, "找不到这个人")
+        res = idem_svc.try_claim(session, key, "outfits", payload_hash)
+        if isinstance(res, JSONResponse):
+            return res
+        claim = res
     if not session.get(Person, payload.person_id):
         raise HTTPException(404, "找不到这个人")
 
-    # 单品解析（复用 / 内联新建）统一在 services.wardrobe.resolve_refs 里，
-    # 编辑接口走同一段逻辑，保证「同一件只会得到同一条单品」
-    pairs = wardrobe_svc.resolve_refs(
-        session, payload.person_id,
-        [r.model_dump() for r in payload.items], source=payload.source,
-    )
+    try:
+        pairs = wardrobe_svc.resolve_refs(
+            session, payload.person_id,
+            [r.model_dump() for r in payload.items], source=payload.source,
+        )
+    except ValueError as e:
+        if claim is not None:
+            # 清理占位，避免失败载荷阻塞后续重试
+            try:
+                session.delete(claim)
+                session.flush()
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=str(e))
 
     note = payload.note
     if payload.location:
@@ -436,7 +471,10 @@ def create_outfit(payload: OutfitIn, session: Session = Depends(get_session)):
     session.flush()
     wardrobe_svc.refresh_worn_dates(session, [i.id for i, _, _ in pairs])
     write_audit(session, "event", event.id, "create", source=payload.source)
-    return _outfit_out(session, event)
+    body = _outfit_out(session, event)
+    if claim is not None:
+        idem_svc.complete_claim(session, claim, 201, body)
+    return body
 
 
 @router.delete("/outfits/{event_id}/items/{item_id}", status_code=204)

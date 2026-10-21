@@ -1,0 +1,30 @@
+:root {
+  --canvas: #f7f7f2;
+  --surface: #fffefa;
+  --ink: #293731;
+  --muted: #707d74;
+  --accent: #387c6d;
+  --accent-soft: #eaf3ed;
+  --line: #e4e8df;
+  --danger: #b44040;
+  --warning: #a56325;
+  --radius: 16px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --content-max: 1100px;
+  --tabbar-h: 60px;
+  --topbar-h: 56px;
+  --van-primary-color: var(--accent);
+  --van-success-color: var(--accent);
+  --van-text-color: var(--ink);
+  --van-text-color-2: var(--muted);
+  --van-background: var(--canvas);
+  --van-background-2: var(--surface);
+  --van-cell-background: var(--surface);
+  --van-border-color: var(--line);
+  --van-button-default-background: var(--surface);
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+img { max-width: 100%; }
+input[type=date], input[type=time], textarea { max-width:100%; }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }

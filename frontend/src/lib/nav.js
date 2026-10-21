@@ -1,14 +1,13 @@
 // 导航结构的纯数据与映射（无副作用，可被 node:test 直接导入验证）。
 //
-// 设计：底部只保留 4 个主 tab；原来的「衣橱 / 相册 / 关系 / 设置 / 搜索」收敛为
-// 分组内的二级分段或顶栏入口，但**复用既有路由与 URL**，不新增也没有删除任何 URL。
+// 衣橱是长期档案，独立于有日期的记录。保留全部既有 URL 与深链。
 
 // 底部 4 个主 tab（顺序即展示顺序）。图标用 vant 内置图标名，渲染时配文字标签。
 export const TABS = [
-  { key: 'today', label: '今天', to: '/', icon: 'home-o' },
-  { key: 'timeline', label: '时间轴', to: '/timeline', icon: 'clock-o' },
+  { key: 'today', label: '概览', to: '/', icon: 'home-o' },
+  { key: 'timeline', label: '记录', to: '/timeline', icon: 'clock-o' },
+  { key: 'wardrobe', label: '衣橱', to: '/wardrobe', icon: 'bag-o' },
   { key: 'people', label: '人物', to: '/people', icon: 'friends-o' },
-  { key: 'todos', label: '待办', to: '/todos', icon: 'todo-list-o' },
 ]
 
 // 分组内二级分段：复用既有路由，不新增页面
@@ -16,7 +15,6 @@ export const GROUP_SEGMENTS = {
   timeline: [
     { key: 'records', label: '记录', to: '/timeline' },
     { key: 'gallery', label: '相册', to: '/gallery' },
-    { key: 'wardrobe', label: '衣橱', to: '/wardrobe' },
   ],
   people: [
     { key: 'people', label: '人物', to: '/people' },

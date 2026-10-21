@@ -2,7 +2,7 @@
 //
 // 规则：只有具体的人（正整数）才生成 ?person=<id>；「全部」/无效值不生成任何
 // query（显式 null），这样下游页能区分「跟随全局（全部）」而不是误带到某个人。
-// 下游页读 ?person 只为「显示这一页」，绝不写回全局 scope（换人只在首页）。
+// 下游页读 ?person 只为「显示这一页」；仅显式「设为默认」会改变全局默认。
 
 export function normalizePersonId(value) {
   // 只接受「正的安全整数」：小数（2.5）、负数、0、空串、'all'、Infinity、
@@ -21,6 +21,7 @@ export function scopeQuery(personId) {
 
 // 下游页求「实际显示谁」：优先 URL 的 ?person，其次全局当前人物；都不写回全局。
 export function resolveScopedPerson(queryPerson, globalPersonId) {
+  if (queryPerson === 'all') return null
   return normalizePersonId(queryPerson) || normalizePersonId(globalPersonId)
 }
 

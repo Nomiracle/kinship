@@ -9,7 +9,8 @@ import mimetypes
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ from ..db import CommitRoute, get_session
 from ..models import Event, Media, Person, WardrobeItem
 from ..schemas import MediaOut
 from ..services import media as media_svc
+from ..services import idempotency as idem_svc
 from ..services.audit import write_audit
 
 router = APIRouter(prefix="/api", tags=["media"], route_class=CommitRoute)
@@ -90,6 +92,7 @@ def list_media(person_id: Optional[int] = None, event_id: Optional[int] = None,
 
 @router.post("/media", response_model=List[MediaOut], status_code=201)
 async def upload_media(
+    request: Request,
     file: List[UploadFile] = File(...),
     person_id: Optional[int] = Form(None),
     event_id: Optional[int] = Form(None),
@@ -98,12 +101,21 @@ async def upload_media(
     session: Session = Depends(get_session),
 ):
     """一次可传多张。手机直传的 HEIC 会自动转 JPG，并统一生成缩略图。"""
+    # 幂等：Idempotency-Key header 可选，per-attachment 需外部为每个文件生成稳定键
+    # 简化：单次请求一个键对应整批；若需 per-attachment，前端应每文件一次请求
+    ikey = idem_svc.extract_key(request)
+    claim = None
     if person_id and not session.get(Person, person_id):
         raise HTTPException(404, "找不到这个人")
-    if event_id and not session.get(Event, event_id):
+    owner_event = session.get(Event, event_id) if event_id else None
+    owner_item = session.get(WardrobeItem, wardrobe_item_id) if wardrobe_item_id else None
+    if event_id and not owner_event:
         raise HTTPException(404, "找不到该记录")
-    if wardrobe_item_id and not session.get(WardrobeItem, wardrobe_item_id):
+    if wardrobe_item_id and not owner_item:
         raise HTTPException(404, "找不到该单品")
+    owners = {obj.person_id for obj in (owner_event, owner_item) if obj is not None and obj.person_id is not None}
+    if len(owners) > 1 or (person_id is not None and owners and person_id not in owners):
+        raise HTTPException(409, "照片人物与记录或单品归属不一致")
 
     cap: Optional[dt.date] = None
     if captured_on:
@@ -112,13 +124,27 @@ async def upload_media(
         except ValueError:
             raise HTTPException(400, "captured_on 需为 YYYY-MM-DD")
 
-    created: List[Media] = []
+    # 预读文件以计算幂等指纹（避免重复上传时再次落盘）
+    file_datas = []
     for up in file:
         data = await up.read()
+        file_datas.append((up.filename or "", data, up.content_type or ""))
+    # 计算指纹：文件内容 hash + 归属字段
+    import hashlib as _hashlib
+    file_hashes = [_hashlib.sha256(d).hexdigest()[:16] for _, d, _ in file_datas if d]
+    if ikey:
+        payload_hash = idem_svc.hash_media_fields(person_id, event_id, wardrobe_item_id, file_hashes, captured_on)
+        res = idem_svc.try_claim(session, ikey, "media", payload_hash)
+        if isinstance(res, JSONResponse):
+            return res
+        claim = res
+
+    created: List[Media] = []
+    for (fname, data, ctype) in file_datas:
         if not data:
             continue
         try:
-            rel, ext, size = media_svc.save_upload(data, up.filename or "", )
+            rel, ext, size = media_svc.save_upload(data, fname, )
         except media_svc.MediaError as exc:
             raise HTTPException(400, str(exc))
 
@@ -147,8 +173,8 @@ async def upload_media(
             path=display_rel,
             source_path=source_rel,
             thumb_path=thumb,
-            original_name=up.filename,
-            mime=mimetypes.guess_type(display_rel)[0] or up.content_type,
+            original_name=fname,
+            mime=mimetypes.guess_type(display_rel)[0] or ctype,
             bytes=size,
             captured_on=cap or dt.date.today(),
         )
@@ -161,7 +187,10 @@ async def upload_media(
         raise HTTPException(400, "没有可用的文件")
     session.flush()
     names = {p.id: p.display_name for p in session.scalars(select(Person))}
-    return [_out(m, names) for m in created]
+    body = [_out(m, names) for m in created]
+    if claim is not None:
+        idem_svc.complete_claim(session, claim, 201, body)
+    return body
 
 
 @router.delete("/media/{media_id}", status_code=204)

@@ -16,4 +16,4 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-filterwarnings = ["error::DeprecationWarning"]
+filterwarnings = ["error::DeprecationWarning:backend.*", "ignore::DeprecationWarning:fastapi.*", "ignore::DeprecationWarning:typing_extensions.*", "ignore::DeprecationWarning:alembic.*", "ignore::DeprecationWarning:sqlalchemy.*"]

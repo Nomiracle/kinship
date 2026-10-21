@@ -40,7 +40,7 @@
               <span v-if="fmtTime(e)" class="muted item-time">{{ fmtTime(e) }}</span>
             </span>
             <span class="acts" v-if="editable">
-              <span class="link" @click="$emit('edit', e)">编辑</span>
+              <span class="link" @click="$emit('edit', original(e))">编辑</span>
               <span class="danger" @click="$emit('delete', e)">删除</span>
             </span>
           </div>
@@ -54,10 +54,10 @@
                 <van-tag plain>{{ labelOf(e.type_key) }}</van-tag>
                 <!-- 只记到日的记录不显示 00:00（那会看起来像凌晨记的） -->
                 <span v-if="fmtTime(e)" class="muted item-time">{{ fmtTime(e) }}</span>
-                <span class="muted" v-if="!hidePerson"> · {{ e.person_name || '—' }}</span>
+                <span class="muted" v-if="!hidePerson"> · {{ nameOf(e) }}</span>
               </span>
-              <span class="acts">
-                <span class="link" @click="$emit('edit', e)">编辑</span>
+              <span class="acts" v-if="editable">
+                <span class="link" @click="$emit('edit', original(e))">编辑</span>
                 <span class="danger" @click="$emit('delete', e)">删除</span>
               </span>
             </div>
@@ -83,6 +83,7 @@
             <div v-if="e.tags" class="chips" style="margin-top: 6px">
               <van-tag v-for="(t, i) in e.tags.split(',')" :key="i" plain>{{ t.trim() }}</van-tag>
             </div>
+            <p class="muted record-times">发生：{{ e.event_date }}{{ fmtTime(e) ? ' ' + fmtTime(e) : ' · 仅日期' }} · 录入：{{ createdAt(e.created_at) }}</p>
           </div>
         </template>
       </template>
@@ -100,6 +101,7 @@
 // 折叠状态下给一条标题预览 + 最多 2 张缩略图，避免「折叠之后什么都看不到」。
 import { computed, ref } from 'vue'
 import { api } from '../api'
+import { useArchiveStore } from '../store'
 import {
   dayHeadline,
   dayThumbs,
@@ -127,7 +129,11 @@ const props = defineProps({
 
 defineEmits(['edit', 'delete', 'preview'])
 
-const days = computed(() => groupByDay(props.items))
+const store = useArchiveStore()
+function original(e) { return props.items.find(row => row.id === e.id) || e }
+function nameOf(e) { const p = store.persons.find(p => p.id === e.person_id); return p ? store.displayName(p) : e.person_name || '—' }
+function createdAt(value) { return value ? new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : value + 'Z').toLocaleString() : '未记录' }
+const days = computed(() => groupByDay(props.items.map(e => store.privacyMode && e.sensitivity === 'sensitive' ? { ...e, title:'●●●', body:null, tags:null, media:[], items:[] } : e)))
 // 展开哪几天：默认全折叠（boss 的默认口径），点日头单独展开
 const open = ref([])
 const isOpen = (date) => open.value.includes(date)

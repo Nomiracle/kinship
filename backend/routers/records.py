@@ -9,7 +9,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -49,6 +50,7 @@ from ..schemas import (
 from ..services.audit import write_audit
 from ..services import media as media_svc
 from ..services import wardrobe as wardrobe_svc
+from ..services import idempotency as idem_svc
 
 router = APIRouter(prefix="/api", tags=["records"], route_class=CommitRoute)
 
@@ -147,7 +149,7 @@ def list_events(
     if date_from:
         conds.append(Event.event_date >= date_from)
     if date_to:
-        conds.append(Event.event_date <= date_to)
+        conds.append(Event.event_date < date_to + dt.timedelta(days=1))
     if q:
         like = "%%%s%%" % q
         conds.append(Event.title.like(like) | Event.body.like(like) | Event.tags.like(like))
@@ -192,7 +194,20 @@ def list_events(
 
 
 @router.post("/events", response_model=EventOut, status_code=201)
-def create_event(payload: EventIn, session: Session = Depends(get_session)):
+def create_event(payload: EventIn, request: Request, session: Session = Depends(get_session)):
+    # 幂等：可选 Idempotency-Key header
+    key = idem_svc.extract_key(request)
+    payload_hash = idem_svc.hash_payload(payload.model_dump(mode="json"))
+    claim = None
+    if key:
+        # 校验 person 存在性在 claim 前，避免无效 payload 占位
+        pid = payload.person_id
+        if pid and not session.get(Person, pid):
+            raise HTTPException(404, "人物不存在")
+        res = idem_svc.try_claim(session, key, "events", payload_hash)
+        if isinstance(res, JSONResponse):
+            return res
+        claim = res
     data = payload.model_dump()
     extra = {k: data.pop(k) for k in ("overnight", "location", "hours")}
     data.pop("event_time", None)   # 已合并进 event_date（见 schemas.EventAtMixin）
@@ -234,7 +249,10 @@ def create_event(payload: EventIn, session: Session = Depends(get_session)):
 
     write_audit(session, "event", event.id, "create", source=event.source)
     session.flush()
-    return _event_out(event, _names(session))
+    body = _event_out(event, _names(session))
+    if claim is not None:
+        idem_svc.complete_claim(session, claim, 201, EventOut.model_validate(body).model_dump(mode="json"))
+    return body
 
 
 @router.patch("/events/{event_id}", response_model=EventOut)

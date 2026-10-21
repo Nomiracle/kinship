@@ -1,13 +1,11 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// 构建产物直接进 <项目根>/deploy/dist（仓库之外），由 FastAPI 托管。
-// 注意路径层级：本文件在 <repo>/frontend/，outDir 相对「工程根」解析，
-// 所以要 ../../deploy/dist —— 写成 ../deploy 会落到 <repo>/deploy（错误）。
+// 默认只构建本地 dist；发布时显式传 --outDir，避免测试构建覆盖正在服务的产物。
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: '../../deploy/dist',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {

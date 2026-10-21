@@ -85,7 +85,7 @@ def find_item(session: Session, person_id: int, category: str, name: str,
     )
     if not include_inactive:
         stmt = stmt.where(WardrobeItem.active.is_(True), WardrobeItem.merged_into_id.is_(None))
-    for row in session.scalars(stmt):
+    for row in session.scalars(stmt.with_for_update()):
         if item_key(row.name, row.color) == (name_key, color_key):
             return row
     return None
@@ -116,7 +116,7 @@ def resolve_refs(session: Session, person_id: int, refs: Sequence[Any],
     """
     from ..models import Person  # 局部导入，避免循环引用
 
-    if not session.get(Person, person_id):
+    if not session.scalar(select(Person).where(Person.id == person_id).with_for_update()):
         raise ValueError("找不到这个人")
     pairs: List[Tuple[WardrobeItem, str, Optional[str]]] = []
     seen = set()

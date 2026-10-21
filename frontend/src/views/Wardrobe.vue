@@ -1,19 +1,23 @@
 <template>
   <div>
-    <!-- 顶栏：显示谁 + 去重入口 -->
+    <!-- 顶栏：显示谁 + 主操作 -->
     <div class="card">
       <div class="row">
-        <span class="muted">显示：{{ scopeLabelText }}（换人在首页）</span>
-        <span class="muted">共 {{ items.length }} 件</span>
+        <span class="muted">显示：{{ scopeLabelText }}（可在顶部切换）</span>
+        <span class="muted">共 {{ filteredItems.length }} / {{ items.length }} 件</span>
       </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <van-button block type="primary" size="small" @click="goAdd">＋ 添加衣物</van-button>
+        <van-button block plain size="small" @click="goRecord()">＋ 记一次穿着（今天）</van-button>
+      </div>
+      <p class="muted" style="margin: 8px 0 0">衣物为长期档案，新增不自动创建穿搭；照片挂在单品上。</p>
+    </div>
+
+    <!-- 筛选：搜索 / 类别 / 颜色 / 无记录 / 视图切换 -->
+    <div class="card">
+      <van-field v-model="q" placeholder="搜索 名称/颜色/标签/备注" clearable left-icon="search" />
       <div class="chips" style="margin-top: 8px">
-        <van-tag
-          :type="category ? 'default' : 'primary'"
-          size="large"
-          @click="category = ''"
-        >
-          全部
-        </van-tag>
+        <van-tag :type="!category ? 'primary' : 'default'" size="large" @click="category = ''">全部</van-tag>
         <van-tag
           v-for="c in store.wardrobeCategories"
           :key="c.key"
@@ -24,13 +28,24 @@
           {{ c.label }}
         </van-tag>
       </div>
-      <!-- 服装的记录入口只在这里（专有流程）：勾单品 → 1 条穿搭 → 累加穿次数 -->
-      <van-button block size="small" type="primary" style="margin-top: 10px" @click="goRecord()">
-        ＋ 记一次穿着（今天）
-      </van-button>
-      <p class="muted" style="margin: 8px 0 0">
-        一件衣服只存一条；反复穿会累加「穿过 N 次」，不再重复记事件。
-      </p>
+      <div v-if="availableColors.length" class="chips" style="margin-top: 8px">
+        <van-tag :type="!colorFilter ? 'primary' : 'default'" size="small" @click="colorFilter = ''">全部颜色</van-tag>
+        <van-tag
+          v-for="col in availableColors"
+          :key="col"
+          :type="colorFilter === col ? 'primary' : 'default'"
+          size="small"
+          @click="colorFilter = colorFilter === col ? '' : col"
+        >
+          <span class="dot" :style="{ background: colorCss(col) }"></span> {{ col }}
+        </van-tag>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" v-model="onlyNoHistory" /> 仅看暂无穿着记录
+        </label>
+        <span class="muted" @click="viewMode = viewMode === 'grid' ? 'list' : 'grid'">{{ viewMode === 'grid' ? '切换列表' : '切换网格' }}</span>
+      </div>
     </div>
 
     <!-- 去重：候选清单（只出候选，合并要你点） -->
@@ -62,47 +77,49 @@
       </div>
     </div>
 
-    <!-- 单品列表（按类别分组） -->
-    <div class="card" v-for="g in groups" :key="g.key">
-      <h3>{{ g.label }}（{{ g.items.length }}）</h3>
-      <div class="row item" v-for="it in g.items" :key="it.id" @click="open(it)">
-        <span class="name">
-          <span class="dot" :style="{ background: colorCss(it.color) }"></span>
-          {{ label(it) }}
-          <span v-if="it.merged_into_id" class="muted">（已合并）</span>
-        </span>
-        <span class="muted">
-          穿 {{ it.wear_count }} 次<span v-if="it.last_worn_on"> · 最近 {{ human(it.last_worn_on) }}</span>
-        </span>
+    <!-- 照片优先：网格 / 列表 -->
+    <div v-if="viewMode === 'grid' && filteredGroups.length" class="grid-wrap">
+      <div v-for="g in filteredGroups" :key="g.key" class="grid-group">
+        <h3>{{ g.label }}（{{ g.items.length }}）</h3>
+        <div class="grid">
+          <div v-for="it in g.items" :key="it.id" class="grid-card" @click="open(it)">
+            <div class="thumb">
+              <img v-if="thumbUrl(it)" :src="thumbUrl(it)" loading="lazy" />
+              <span v-else class="thumb-ph">{{ g.label.slice(0,1) }}</span>
+            </div>
+            <div class="grid-meta">
+              <span class="name"><span class="dot" :style="{ background: colorCss(it.color) }"></span> {{ label(it) }}</span>
+              <span class="muted" style="font-size:11px">穿 {{ it.wear_count }} 次<span v-if="it.last_worn_on"> · 最近 {{ human(it.last_worn_on) }}</span><span v-else> · 暂无穿着记录</span></span>
+            </div>
+            <span v-if="!it.active" class="muted" style="font-size:11px">（已停用）</span>
+            <span v-if="it.merged_into_id" class="muted" style="font-size:11px">（已合并）</span>
+          </div>
+        </div>
       </div>
     </div>
 
-    <van-empty v-if="!items.length" description="还没有单品：点上面的「＋ 记一次穿着」，或在这里新建" />
+    <template v-if="viewMode === 'list'">
+      <div class="card" v-for="g in filteredGroups" :key="g.key">
+        <h3>{{ g.label }}（{{ g.items.length }}）</h3>
+        <div class="row item" v-for="it in g.items" :key="it.id" @click="open(it)">
+          <span class="name">
+            <img v-if="thumbUrl(it)" :src="thumbUrl(it)" class="list-thumb" />
+            <span v-else class="list-thumb ph">{{ g.label.slice(0,1) }}</span>
+            <span class="dot" :style="{ background: colorCss(it.color) }"></span>
+            {{ label(it) }}
+            <span v-if="it.merged_into_id" class="muted">（已合并）</span>
+          </span>
+          <span class="muted">
+            穿 {{ it.wear_count }} 次<span v-if="it.last_worn_on"> · 最近 {{ human(it.last_worn_on) }}</span><span v-else> · 暂无穿着记录</span>
+          </span>
+        </div>
+      </div>
+    </template>
 
-    <!-- 新建单品 -->
-    <div class="card">
-      <h3>新建单品</h3>
-      <van-field v-model="nName" label="名称" placeholder="如：黑色阔腿裤" />
-      <van-field v-model="nColor" label="颜色" placeholder="如：黑色（可空）" />
-      <van-field label="类别">
-        <template #input>
-          <select v-model="nCategory" class="picker">
-            <option v-for="c in store.wardrobeCategories" :key="c.key" :value="c.key">
-              {{ c.label }}
-            </option>
-          </select>
-        </template>
-      </van-field>
-      <van-button block type="primary" size="small" style="margin-top: 8px" @click="create">
-        新建
-      </van-button>
-      <p class="muted" style="margin: 8px 0 0">
-        同一个人 + 同类别 + 同名 + 同色 建不出第二条（会提示复用已有的）。
-      </p>
-    </div>
+    <van-empty v-if="!filteredItems.length" :description="items.length ? '无匹配单品' : '还没有单品：点上面的「＋ 添加衣物」'" />
 
     <!-- 单品详情 -->
-    <van-popup v-model:show="showDetail" position="bottom" round :style="{ height: '82%' }">
+    <van-popup v-model:show="showDetail" position="bottom" round class="wardrobe-detail" :style="{ height: '82%' }">
       <div class="detail" v-if="detail">
         <div class="row">
           <h3 style="margin: 0">{{ label(detail) }}</h3>
@@ -112,26 +129,15 @@
           穿过 {{ detail.wear_count }} 次
           <span v-if="detail.first_worn_on"> · 首次 {{ detail.first_worn_on }}</span>
           <span v-if="detail.last_worn_on"> · 最近 {{ detail.last_worn_on }}</span>
+          <span v-else> · 暂无穿着记录</span>
         </p>
 
-        <van-field v-model="edit.name" label="名称" />
-        <van-field v-model="edit.color" label="颜色" />
-        <van-field v-model="edit.tags" label="标签" placeholder="逗号分隔，如：露肩,格子" />
-        <van-field v-model="edit.notes" label="备注" type="textarea" rows="2" autosize />
-        <van-field label="类别">
-          <template #input>
-            <select v-model="edit.category" class="picker">
-              <option v-for="c in store.wardrobeCategories" :key="c.key" :value="c.key">
-                {{ c.label }}
-              </option>
-            </select>
-          </template>
-        </van-field>
+        <dl class="item-summary"><dt>类别</dt><dd>{{ store.wardrobeCategoryLabel(detail.category) }}</dd><dt>颜色</dt><dd>{{ detail.color || '未填写' }}</dd><dt>标签</dt><dd>{{ detail.tags || '未填写' }}</dd><dt>备注</dt><dd>{{ detail.notes || '未填写' }}</dd></dl>
         <div class="chips" style="margin-top: 8px">
           <van-button size="small" type="primary" plain @click="goRecord(detail.id)">
             ＋ 再穿一次（今天）
           </van-button>
-          <van-button size="small" type="primary" @click="save">保存</van-button>
+          <van-button size="small" plain @click="goEdit(detail.id)">编辑页</van-button>
           <van-button size="small" @click="pickMerge = true">合并到…</van-button>
           <van-button size="small" @click="toggleActive">
             {{ detail.active ? '停用' : '恢复' }}
@@ -146,13 +152,10 @@
         <div class="thumbs">
           <template v-for="m in detail.media" :key="m.id">
             <img v-if="m.kind !== 'video'" :src="api.mediaUrl(m)" @click="openFull(m, detailPhotos)" />
-            <!-- 视频没有页面内预览：给个带 ▶ 的方块，点开看原片（新标签页） -->
             <a v-else class="video-ph" :href="api.mediaUrl(m, false)" target="_blank">▶</a>
           </template>
         </div>
-        <van-uploader :after-read="upload" :max-count="1" style="margin-top: 6px">
-          <van-button size="small" plain>＋ 上传照片</van-button>
-        </van-uploader>
+        <van-button size="small" plain @click="goEdit(detail.id)">＋ 添加照片</van-button>
 
         <h4>穿着历史（{{ detail.wears.length }}）</h4>
         <div v-for="w in detail.wears" :key="w.event_id" class="wear">
@@ -166,7 +169,6 @@
             </span>
           </div>
           <div v-if="w.note" class="muted">备注：{{ w.note }}</div>
-          <!-- 那次穿搭的照片：图挂在「事件」上（一张全身照只存一份），单品视图里带出来即可 -->
           <div v-if="(w.media || []).length" class="thumbs" style="margin-top: 6px">
             <template v-for="m in w.media" :key="m.id">
               <img v-if="m.kind === 'image'" :src="api.mediaUrl(m)" @click="openFull(m, detailPhotos)" />
@@ -174,23 +176,20 @@
             </template>
           </div>
         </div>
-        <van-empty v-if="!detail.wears.length" description="还没穿过（或只是「提起过」）" />
+        <van-empty v-if="!detail.wears.length" description="暂无穿着记录" />
       </div>
     </van-popup>
 
-    <!-- 图片放大：页面内预览（支持双指缩放 / 左右滑动）。集合 = 单品照片 + 各次穿着的照片，
-         点哪张就从哪张开始 —— 单品照片和穿着照片在同一层里连续翻看，不用回退再点。 -->
     <van-image-preview
       v-model:show="preview.show"
       :images="preview.images"
       :start-position="preview.index"
     />
 
-    <!-- 合并目标选择 -->
     <van-popup v-model:show="pickMerge" position="bottom" round :style="{ height: '60%' }">
       <div class="detail">
         <h3>把「{{ label(detail) }}」合并到</h3>
-        <p class="muted">穿着记录会改挂到目标单品，源单品标记作废（可撤销）。</p>
+        <p class="muted">穿着记录会改挂到目标单品，源单品标记作废。撤销合并只恢复标记，穿着记录不会自动拆回。</p>
         <div class="row" v-for="it in mergeCandidates" :key="it.id" @click="merge(detail.id, it.id, detail, it)">
           <span>{{ label(it) }}</span>
           <span class="muted">穿 {{ it.wear_count }} 次</span>
@@ -210,14 +209,20 @@ import { useArchiveStore } from '../store'
 import { resolveScopedPerson, scopeQuery } from '../lib/scope'
 import { previewUrls } from '../lib/media-preview'
 import { fmtWhen } from '../lib/event-day'
+import { filterWardrobeItems, collectColors } from '../lib/wardrobe-create'
 
 const store = useArchiveStore()
 const route = useRoute()
 const router = useRouter()
-// 衣橱实际显示谁：优先 URL ?person（从个人页点进来），否则跟随全局；不写回全局。
 const effectivePersonId = computed(() =>
   resolveScopedPerson(route.query.person, store.currentPersonId)
 )
+const rawPersonQuery = computed(() => route.query.person)
+function navQuery() {
+  if (rawPersonQuery.value === 'all') return { person: 'all' }
+  // preserve explicit all, otherwise follow effective scope
+  return scopeQuery(effectivePersonId.value)
+}
 const scopeLabelText = computed(() => {
   const id = effectivePersonId.value
   if (!id) return '全部'
@@ -227,14 +232,15 @@ const scopeLabelText = computed(() => {
 const items = ref([])
 const dupGroups = ref([])
 const category = ref('')
+const colorFilter = ref('')
+const q = ref('')
+const onlyNoHistory = ref(false)
+const viewMode = ref('grid')
 const showDup = ref(true)
 const showDetail = ref(false)
 const pickMerge = ref(false)
 const detail = ref(null)
-const edit = reactive({ name: '', color: '', tags: '', notes: '', category: 'other' })
-const nName = ref('')
-const nColor = ref('')
-const nCategory = ref('top')
+
 
 const COLORS = {
   黑色: '#222', 白色: '#fff', 灰色: '#bbb', 蓝色: '#3b6fd4', 棕色: '#8b5a2b',
@@ -263,21 +269,33 @@ function human(d) {
   return days + ' 天前'
 }
 
-const groups = computed(() =>
+function thumbUrl(it) {
+  const m = (it.media || []).find((x) => x.kind !== 'video')
+  return m ? api.mediaUrl(m, true) : ''
+}
+
+const filteredItems = computed(() =>
+  filterWardrobeItems(items.value, {
+    category: category.value,
+    color: colorFilter.value,
+    q: q.value,
+    onlyNoHistory: onlyNoHistory.value,
+  })
+)
+
+const filteredGroups = computed(() =>
   store.wardrobeCategories
-    .map((c) => ({ ...c, items: items.value.filter((i) => i.category === c.key && (!category.value || category.value === c.key)) }))
+    .map((c) => ({ ...c, items: filteredItems.value.filter((i) => i.category === c.key) }))
     .filter((g) => g.items.length)
 )
 
-// 详情页里所有能放大的图：单品自己的照片 + 各次穿着的照片（图挂在事件上，
-// 这里只是带出来 —— 预览想把它们串成一条，省得「看全身照要点两次」）。
+const availableColors = computed(() => collectColors(items.value))
+
 const detailPhotos = computed(() => [
   ...(detail.value?.media || []),
   ...(detail.value?.wears || []).flatMap((w) => w.media || []),
 ])
 
-// 点图放大：页面内预览，不再开新标签页 —— 手机上开新标签页会把 SPA 丢到后台，
-// 看完还得手动切回来。视频没得预览，仍走原片新标签页（模板里的 <a>）。
 const preview = reactive({ show: false, images: [], index: 0 })
 
 function openFull(m, list) {
@@ -289,20 +307,25 @@ function openFull(m, list) {
 
 const mergeCandidates = computed(() => {
   if (!detail.value) return []
-  return items.value.filter((i) => i.category === detail.value.category && i.id !== detail.value.id && !i.merged_into_id)
+  return items.value.filter((i) => i.person_id === detail.value.person_id && i.category === detail.value.category && i.id !== detail.value.id && !i.merged_into_id)
 })
 
-// 记一次穿着（专有页 /wardrobe/new）：从单品详情点进来时预选这件。
-// 服装没有「改这条记录」的入口 —— 用来记总是新增一条穿搭，改历史记录去时间轴。
+function goAdd() {
+  const q2 = navQuery()
+  router.push({ path: '/wardrobe/items/new', query: q2 })
+}
+function goEdit(id) {
+  const q2 = navQuery()
+  router.push({ path: `/wardrobe/items/${id}/edit`, query: q2 })
+}
 function goRecord(itemId) {
-  const q = { ...scopeQuery(effectivePersonId.value) }
-  if (itemId) q.item = itemId
-  router.push({ path: '/wardrobe/new', query: q })
+  const q2 = navQuery()
+  if (itemId) { q2.item = itemId; q2.person=detail.value?.person_id || effectivePersonId.value || 'all' }
+  router.push({ path: '/wardrobe/new', query: q2 })
 }
 
 async function load() {
   const personId = effectivePersonId.value || undefined
-  // 并发：两件事互不依赖，慢链路上少一个往返
   const [res, dup] = await Promise.all([
     api.wardrobeItems({
       person_id: personId,
@@ -316,31 +339,7 @@ async function load() {
 
 async function open(it) {
   detail.value = await api.wardrobeItem(it.id)
-  Object.assign(edit, {
-    name: detail.value.name,
-    color: detail.value.color || '',
-    tags: detail.value.tags || '',
-    notes: detail.value.notes || '',
-    category: detail.value.category,
-  })
   showDetail.value = true
-}
-
-async function save() {
-  try {
-    await api.patchWardrobeItem(detail.value.id, {
-      name: edit.name,
-      color: edit.color || null,
-      tags: edit.tags || null,
-      notes: edit.notes || null,
-      category: edit.category,
-    })
-    showToast('已保存')
-    showDetail.value = false
-    await load()
-  } catch (e) {
-    showToast(e.message)
-  }
 }
 
 async function toggleActive() {
@@ -370,7 +369,7 @@ async function merge(srcId, intoId, src, dst) {
   try {
     await showConfirmDialog({
       title: '合并单品',
-      message: `把「${src.name}」并到「${dst.name}」？\n穿着记录会合到一起，源单品作废（可撤销）。`,
+      message: `把「${src.name}」并到「${dst.name}」？\n穿着记录会合到一起，源单品作废。撤销合并只恢复标记，穿着记录不会自动拆回。`,
     })
   } catch {
     return
@@ -383,50 +382,18 @@ async function merge(srcId, intoId, src, dst) {
 }
 
 async function unmerge() {
+  try {
+    await showConfirmDialog({
+      title: '撤销合并',
+      message: '撤销合并只恢复“已合并”标记，穿着记录不会自动拆回。如需还原请手动调整。确定撤销？',
+    })
+  } catch {
+    return
+  }
   await api.unmergeWardrobeItem(detail.value.id)
-  showToast('已撤销合并')
+  showToast('已撤销合并（穿着记录未拆回）')
   showDetail.value = false
   await load()
-}
-
-async function create() {
-  if (!nName.value.trim()) {
-    showToast('先填名称')
-    return
-  }
-  if (!effectivePersonId.value) {
-    showToast('先在首页选一个人（单品要挂在人下面）')
-    return
-  }
-  try {
-    await api.createWardrobeItem({
-      person_id: effectivePersonId.value,
-      category: nCategory.value,
-      name: nName.value.trim(),
-      color: nColor.value || null,
-    })
-    showToast('已新建')
-    nName.value = ''
-    nColor.value = ''
-    await load()
-  } catch (e) {
-    showToast(e.message)
-  }
-}
-
-async function upload(file) {
-  const raw = file.file || file
-  try {
-    await api.uploadMedia(raw, {
-      person_id: detail.value.person_id,
-      wardrobe_item_id: detail.value.id,
-      captured_on: new Date().toLocaleDateString('sv-SE'),
-    })
-    showToast('已上传')
-    detail.value = await api.wardrobeItem(detail.value.id)
-  } catch (e) {
-    showToast(e.message)
-  }
 }
 
 watch(effectivePersonId, () => load())
@@ -438,6 +405,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.item-summary {display:grid;grid-template-columns:60px 1fr;gap:10px;font-size:14px}.item-summary dt{color:var(--muted)}.item-summary dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(min-width:1000px){.wardrobe-detail{width:48%!important;left:auto!important;right:0;top:var(--topbar-h);bottom:0;height:calc(100% - var(--topbar-h))!important;border-radius:var(--radius) 0 0 0!important}}
 .item {
   cursor: pointer;
 }
@@ -502,4 +471,35 @@ onMounted(async () => {
   background: #fff;
   font-size: 14px;
 }
+.grid-wrap { margin-bottom: 10px; }
+.grid-group h3 { font-size: 14px; margin: 8px 0; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+@media (min-width: 600px) {
+  .grid { grid-template-columns: repeat(3, 1fr); }
+}
+.grid-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 6px;
+  cursor: pointer;
+}
+.thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f7f8fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb-ph { color: #969799; font-size: 20px; }
+.grid-meta { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.list-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; }
+.list-thumb.ph { background:#f2f3f5; display:inline-flex; align-items:center; justify-content:center; color:#969799; font-size:12px; }
 </style>

@@ -8,10 +8,10 @@ import {
   activeSegmentKey,
 } from '../src/lib/nav.js'
 
-test('底部恰好 4 个主 tab，顺序为 今天 / 时间轴 / 人物 / 待办', () => {
-  assert.deepEqual(TABS.map((t) => t.key), ['today', 'timeline', 'people', 'todos'])
-  assert.deepEqual(TABS.map((t) => t.label), ['今天', '时间轴', '人物', '待办'])
-  assert.deepEqual(TABS.map((t) => t.to), ['/', '/timeline', '/people', '/todos'])
+test('底部主导航为概览 / 记录 / 衣橱 / 人物，待办保留独立入口', () => {
+  assert.deepEqual(TABS.map((t) => t.key), ['today', 'timeline', 'wardrobe', 'people'])
+  assert.deepEqual(TABS.map((t) => t.label), ['概览', '记录', '衣橱', '人物'])
+  assert.deepEqual(TABS.map((t) => t.to), ['/', '/timeline', '/wardrobe', '/people'])
 })
 
 test('每个主 tab 都带图标名（图标 + 文字标签，非纯文字）', () => {
@@ -31,10 +31,10 @@ test('子页继承父 tab（父导航高亮准确）', () => {
   assert.equal(activeTabKey({ name: 'new', meta: {} }), null)
 })
 
-test('时间轴分组含 记录 / 相册 / 衣橱，且复用既有路由', () => {
+test('记录分组仅含记录和相册，衣橱有自己的主导航', () => {
   const segs = segmentsForRoute({ meta: { group: 'timeline' } })
-  assert.deepEqual(segs.map((s) => s.to), ['/timeline', '/gallery', '/wardrobe'])
-  assert.deepEqual(segs.map((s) => s.key), ['records', 'gallery', 'wardrobe'])
+  assert.deepEqual(segs.map((s) => s.to), ['/timeline', '/gallery'])
+  assert.deepEqual(segs.map((s) => s.key), ['records', 'gallery'])
   assert.equal(segmentsForRoute({ meta: {} }), null)
   assert.equal(segmentsForRoute({}), null)
 })

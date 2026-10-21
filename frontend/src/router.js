@@ -10,6 +10,7 @@ const views = {
   timeline: () => import('./views/Timeline.vue'),
   wardrobe: () => import('./views/Wardrobe.vue'),
   wardrobeNew: () => import('./views/WardrobeNew.vue'),
+  wardrobeItemEditor: () => import('./views/WardrobeItemEditor.vue'),
   relations: () => import('./views/Relations.vue'),
   gallery: () => import('./views/Gallery.vue'),
   people: () => import('./views/PeopleView.vue'),
@@ -29,19 +30,21 @@ const views = {
 //   hideTabbar 是否隐藏底部 tabbar（录入/编辑路由）
 //   scoped    该页只读显示「某个人/全部」的范围（顶栏范围指示器据此显示，不改全局）
 const routes = [
-  { path: '/', name: 'dashboard', component: views.dashboard, meta: { title: '今天', tab: 'today' } },
+  { path: '/', name: 'dashboard', component: views.dashboard, meta: { title: '概览', tab: 'today', scoped: true } },
   { path: '/new', name: 'new', component: views.new, meta: { title: '记录', back: true, backTo: '/', hideTabbar: true } },
-  { path: '/timeline', name: 'timeline', component: views.timeline, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
-  { path: '/wardrobe', name: 'wardrobe', component: views.wardrobe, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/timeline', name: 'timeline', component: views.timeline, meta: { title: '记录', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/wardrobe', name: 'wardrobe', component: views.wardrobe, meta: { title: '衣橱', tab: 'wardrobe', scoped: true } },
+  { path: '/wardrobe/items/new', name: 'wardrobe-item-new', component: views.wardrobeItemEditor, meta: { title: '添加衣物', tab: 'wardrobe', back: true, backTo: '/wardrobe', hideTabbar: true } },
+  { path: '/wardrobe/items/:id/edit', name: 'wardrobe-item-edit', component: views.wardrobeItemEditor, meta: { title: '编辑衣物', tab: 'wardrobe', back: true, backTo: '/wardrobe', hideTabbar: true } },
   // 服装的专有记录页：不在通用「记录页」里记（那里只记事件，不管单品目录）。
   // 不加 group → 不渲染二级分段条（录入页只要返回按钮）。
-  { path: '/wardrobe/new', name: 'wardrobe-new', component: views.wardrobeNew, meta: { title: '记穿搭', tab: 'timeline', back: true, backTo: '/wardrobe', hideTabbar: true, scoped: true } },
-  { path: '/gallery', name: 'gallery', component: views.gallery, meta: { title: '时间轴', tab: 'timeline', group: 'timeline', scoped: true } },
+  { path: '/wardrobe/new', name: 'wardrobe-new', component: views.wardrobeNew, meta: { title: '记穿搭', tab: 'wardrobe', back: true, backTo: '/wardrobe', hideTabbar: true, scoped: true } },
+  { path: '/gallery', name: 'gallery', component: views.gallery, meta: { title: '相册', tab: 'timeline', group: 'timeline', scoped: true } },
   { path: '/people', name: 'people', component: views.people, meta: { title: '人物', tab: 'people', group: 'people' } },
   { path: '/relations', name: 'relations', component: views.relations, meta: { title: '人物', tab: 'people', group: 'people' } },
   { path: '/person/:id', name: 'person', component: views.person, meta: { title: '人物', tab: 'people', back: true, backTo: '/people', scoped: true } },
   { path: '/cycle', name: 'cycle', component: views.cycle, meta: { title: '生理期', back: true, backTo: '/people', scoped: true } },
-  { path: '/todos', name: 'todos', component: views.todos, meta: { title: '待办', tab: 'todos', scoped: true } },
+  { path: '/todos', name: 'todos', component: views.todos, meta: { title: '待办', tab: 'today', back: true, backTo: '/', scoped: true } },
   { path: '/search', name: 'search', component: views.search, meta: { title: '搜索', back: true, backTo: '/' } },
   { path: '/settings', name: 'settings', component: views.settings, meta: { title: '设置', back: true, backTo: '/' } },
 ]

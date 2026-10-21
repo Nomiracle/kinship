@@ -14,6 +14,8 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,10 +27,20 @@ from .routers import core, insight, public, records
 from .routers import media as media_api
 from .routers import wardrobe as wardrobe_api
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    print("[kinship-archive] 启动：%s:%s" % (settings.host, settings.port))
+    print("[kinship-archive] 部署目录：%s" % settings.deploy_dir)
+    print("[kinship-archive] 配置：%s" % (settings.config_path or "未找到 config.toml"))
+    print("[kinship-archive] 口令：%s" % ("已启用" if settings.token else "未设置（开发模式）"))
+    print("[kinship-archive] 前端产物：%s" % ("已就绪" if settings.dist_path.is_dir() else "缺失"))
+    yield
+
 app = FastAPI(
     title=settings.app_title,
     version="0.1.0",
     description="通用关系档案系统 —— 任意关系、统一时间轴、模块按人开关。",
+    lifespan=lifespan,
 )
 
 # 开发模式：Vite dev server 跨端口访问 API
@@ -178,12 +190,3 @@ def _mount_frontend() -> None:
 
 
 _mount_frontend()
-
-
-@app.on_event("startup")
-def _startup_banner() -> None:  # pragma: no cover - 日志
-    print("[kinship-archive] 启动：%s:%s" % (settings.host, settings.port))
-    print("[kinship-archive] 部署目录：%s" % settings.deploy_dir)
-    print("[kinship-archive] 配置：%s" % (settings.config_path or "未找到 config.toml"))
-    print("[kinship-archive] 口令：%s" % ("已启用" if settings.token else "未设置（开发模式）"))
-    print("[kinship-archive] 前端产物：%s" % ("已就绪" if settings.dist_path.is_dir() else "缺失"))

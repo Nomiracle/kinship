@@ -69,7 +69,10 @@ uvicorn backend.main:app --reload --port 8787
 cd frontend && npm install && npm run dev -- --host
 ```
 
-Production: `npm run build` into `../deploy/dist/`, then run uvicorn on `8787` and open
+`npm run build` now writes **only** `frontend/dist/` for safe validation. An approved
+production release must explicitly publish its reviewed artifact into `../deploy/dist/`
+(for example `npm run build -- --outDir ../../deploy/dist`, after backups and migration
+validation), then run uvicorn on `8787` and open
 `http://<lan-ip>:8787`. launchd templates live in `ops/launchd/` (rendered to
 `~/Library/LaunchAgents/` by `ops/install-launchd.sh`, so no absolute path is ever
 committed).

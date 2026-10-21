@@ -28,6 +28,10 @@ test('下游页 ?person 优先，其次全局；两者都不写回全局', () =>
   assert.equal(resolveScopedPerson(0, '12'), 12)
 })
 
+test('显式全部可以覆盖已设默认人物，刷新和跨页仍为全部', () => {
+  assert.equal(resolveScopedPerson('all', 3), null)
+})
+
 test('normalizePersonId 只接受正整数', () => {
   assert.equal(normalizePersonId('5'), 5)
   assert.equal(normalizePersonId(5), 5)
