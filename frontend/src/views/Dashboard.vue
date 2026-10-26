@@ -229,8 +229,12 @@ async function completeTodo(t, event) {
 
 watch(effectivePersonId, () => load().catch(() => showToast('加载失败，请重试')))
 onMounted(async () => {
-  await store.ensureLoaded()
-  await load()
+  // ★ 「今天卡片 + 待办」和 config/persons 互不依赖 → 同一波发出，
+  //   省掉一次串行往返（手机链路上实测这一次差 1.2–2.4s）。
+  //   可以直接并发：load() 取的就是「当前 scope」，未选人时是「全部」，与服务端默认一致；
+  //   新版 loadPersons 不再自动挑第一个人，所以 ensureLoaded 不会改变这次请求的归属。
+  const first = load().catch(() => showToast('加载失败，请重试'))
+  await Promise.all([first, store.ensureLoaded()])
 })
 </script>
 

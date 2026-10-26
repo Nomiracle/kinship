@@ -27,8 +27,14 @@ import './styles/tokens.css'
 
 createApp(App).use(createPinia()).use(router).use(Vant).mount('#app')
 
-// 空闲时把各页面的 chunk 预取下来：手机经 Tailscale 时单程 RTT ~400ms，
-// 预取之后「点导航」就不必再等一次往返去取 chunk（详见 router.js 的注释）。
-// Safari 没有 requestIdleCallback → 退化成挂载 1.5s 后触发。
-const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1500))
-idle(() => prefetchViews())
+// 页面 chunk 的预取（只影响「点导航快不快」，不影响首屏）。
+// ★ 不能挂载后就立刻抓：13 个 chunk 会和首屏的 CSS/JS 与 /api 请求抢同一条连接，
+//   在手机链路（每往返 400ms 级）上反而把首屏拖慢 —— 实测冷启动有 20+ 个 chunk 请求
+//   挤在 2.3s 之后。改成「load 事件之后再等 3s」：首屏该拿的都拿完了才轮到预取。
+// 之后点击导航仍然命中浏览器模块表（不会重复请求）。
+function schedulePrefetch() {
+  const run = () => setTimeout(() => prefetchViews(), 3000)
+  if (document.readyState === 'complete') run()
+  else window.addEventListener('load', run, { once: true })
+}
+schedulePrefetch()

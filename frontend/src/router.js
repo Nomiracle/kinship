@@ -1,11 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Dashboard from './views/Dashboard.vue'
 
-// 页面 chunk 的加载器集中在这里：路由用它懒加载，main.js 用它做空闲预取。
-// ★ 为什么预取：手机经 Tailscale 访问时单程 RTT ~400ms，「点一下导航」等于
-//   再等一次往返去取 4-16KB 的 chunk。登录后空闲时把这些 chunk 全拿下来，
-//   之后点击就是本地切换（浏览器模块表已缓存，不会重复请求）。
+// 页面 chunk 的加载器集中在这里：路由用它懒加载，main.js 用它做延迟预取。
+// ★ 为什么预取：每开一个新页面都要为 4–16KB 的 chunk 付一次往返（手机链路上 400ms 级）。
+//   预取之后「点导航」就是本地切换（浏览器模块表已缓存，不会重复请求）。
+// ★ 首页（/）例外：它永远是最先要画的页面。懒加载意味着「入口 JS 跑完 → 再要一次 Dashboard
+//   chunk」，在慢链路上就是白等一整趟往返（实测首屏 API 被推后 ~470ms）。所以 Dashboard
+//   静态引入、并进入口包（约 +4KB gzip），用体积换首屏的一个往返。
 const views = {
-  dashboard: () => import('./views/Dashboard.vue'),
+  dashboard: () => Promise.resolve(Dashboard),
   new: () => import('./views/NewRecord.vue'),
   timeline: () => import('./views/Timeline.vue'),
   wardrobe: () => import('./views/Wardrobe.vue'),
@@ -49,9 +52,23 @@ const routes = [
   { path: '/settings', name: 'settings', component: views.settings, meta: { title: '设置', back: true, backTo: '/' } },
 ]
 
-export function prefetchViews() {
-  // 失败无所谓（断网时下次点击再拉），所以用 allSettled 吞掉错误
-  return Promise.allSettled(Object.values(views).map((load) => load()))
+// ★ 预取必须限并发：13 个 chunk 同时发会把首屏和 /api 请求挤在同一条连接后面
+//   （实测反而更慢）。固定 2 路并发，按上面的声明顺序一条一条拿。
+export function prefetchViews(concurrency = 2) {
+  const queue = Object.values(views)
+  const worker = async () => {
+    while (queue.length) {
+      const load = queue.shift()
+      // 失败无所谓（断网/慢网时下次点击再拉），不能让它冒泡成未处理拒绝
+      try {
+        await load()
+      } catch {
+        /* noop */
+      }
+    }
+  }
+  const n = Math.max(1, Math.min(concurrency, queue.length))
+  return Promise.allSettled(Array.from({ length: n }, () => worker()))
 }
 
 export default createRouter({

@@ -50,6 +50,7 @@ import {createInitialState,snapshotDraft,isDirty,saveSessionDraft,loadSessionDra
 import {spanError} from '../../lib/meeting-span.js'
 import {buildEventPayload,buildOutfitPayload,buildEditPayload,createSubmissionManager} from '../../lib/record-submit.js'
 import {previewUrls} from '../../lib/media-preview.js'
+import {mergeRecent} from '../../lib/recent.js'
 import OutfitForm from '../OutfitForm.vue'
 import EventFields from './EventFields.vue'
 import OutfitFields from './OutfitFields.vue'
@@ -109,6 +110,7 @@ async function submit(){
     }catch{return}finally{confirming.value=false}
   }
   try{
+    const hadFiles=(draft.fileTasks||[]).length>0
     const result=await submission.run(api)
     if(!result)return
     if(result.status==='partial'){draft.fileTasks=submission.fileTasks;showToast('记录已保存，图片待重试');return}
@@ -118,7 +120,11 @@ async function submit(){
     baseline.value=snapshotDraft(draft)
     if(props.sessionKey)clearSessionDraft(draftKey.value)
     emit('saved',result.record)
-    await loadRecent()
+    // ★ 纯文字：POST/PATCH 的返回体已够渲染「刚记的」，直接插到头部 —— 不再为它回源跑一个往返
+    //   （手机链路上这是一次 400ms 级的等待）。只有这次真带了图片才回源：
+    //   上传后的 media 只存在服务端那一份里，返回体里没有。
+    if(hadFiles) await loadRecent()
+    else recent.value=mergeRecent(recent.value,result.record)
   }catch(e){error.value=e.message||'保存失败';showToast(error.value)}
 }
 let closeApproved=false

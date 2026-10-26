@@ -111,3 +111,54 @@ test('相处跨日：开关+结束日期串到草稿与 payload，编辑优先�
   assert.ok(timeline.indexOf('const m=e.meeting') < timeline.indexOf('api.interactions(e.person_id)'))
   assert.match(code('src/lib/record-submit.js'), /ended_on:endedOn/)
 })
+
+// ---------------------------------------------------------------- 慢链路往返（2026-10 手机加载优化）
+test('首页首屏：今天卡片/待办与 config/persons 同一波并发（不再串行等待）', () => {
+  const dash = src('src/views/Dashboard.vue')
+  assert.match(dash, /const first = load\(\)\.catch\(\(\) => showToast\('加载失败，请重试'\)\)/)
+  assert.match(dash, /await Promise\.all\(\[first, store\.ensureLoaded\(\)\]\)/)
+  // ★ 别再出现「先 await ensureLoaded() 再 load()」：新版 loadPersons 不自动挑人，
+  //   串行只会白等一个往返（实测 1.2–2.4s）
+  assert.ok(
+    !/await store\.ensureLoaded\(\)\s*\n\s*await load\(\)/.test(dash),
+    '首页首屏的两个数据源必须并发'
+  )
+})
+
+test('保存纯文字后不再回源拿「刚记的」，只有带图才回源', () => {
+  const rc = src('src/components/records/RecordComposer.vue')
+  assert.match(rc, /const hadFiles=\(draft\.fileTasks\|\|\[\]\)\.length>0/)
+  assert.match(rc, /if\(hadFiles\) await loadRecent\(\)/)
+  assert.match(rc, /else recent\.value=mergeRecent\(recent\.value,result\.record\)/)
+  assert.match(rc, /import \{mergeRecent\} from '\.\.\/\.\.\/lib\/recent\.js'/)
+  // ★ 别再出现「保存成功后无条件 await loadRecent()」：那是白等一个往返
+  assert.ok(
+    !/emit\('saved',result\.record\)\s*\n\s*await loadRecent\(\)/.test(rc),
+    '保存后不应无条件回源（纯文字用返回体插入即可；有图才回源）'
+  )
+})
+
+test('chunk 预取延后到 load 之后并限并发（别和首屏抢连接）', () => {
+  const main = src('src/main.js')
+  assert.match(main, /window\.addEventListener\('load', run, \{ once: true \}\)/)
+  assert.match(main, /setTimeout\(\(\) => prefetchViews\(\), 3000\)/)
+  assert.ok(!/idle\(\(\) => prefetchViews\(\)\)/.test(main), '挂载后立刻预取会拖慢首屏')
+
+  const router = src('src/router.js')
+  assert.match(router, /export function prefetchViews\(concurrency = 2\)/)
+  assert.match(router, /queue\.shift\(\)/)
+  assert.ok(
+    !/Object\.values\(views\)\.map\(\(load\) => load\(\)\)/.test(router),
+    '13 个 chunk 一次性并发会挤占首屏'
+  )
+})
+
+test('首页 Dashboard 静态引入（不额外付一趟 chunk 往返）', () => {
+  const router = src('src/router.js')
+  assert.match(router, /import Dashboard from '\.\/views\/Dashboard\.vue'/)
+  assert.match(router, /dashboard: \(\) => Promise\.resolve\(Dashboard\)/)
+  assert.ok(
+    !/dashboard: \(\) => import\('\.\/views\/Dashboard\.vue'\)/.test(router),
+    '首页懒加载会让首屏多等一整趟往返'
+  )
+})
