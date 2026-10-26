@@ -76,6 +76,14 @@ def upgrade() -> None:
             "    updated_at = DATE_ADD(updated_at, INTERVAL :h HOUR)"
         ), {"h": int(offset)})
 
+    # 历史表是照着「迁移前」的 created_at 抄的 → 跟着对齐一次（含生效日，
+    # 否则 16:00 UTC 之后加入的单品，历史生效日会差一天）
+    op.execute(sa.text(
+        "UPDATE wardrobe_item_status_log l JOIN wardrobe_items i ON i.id = l.item_id "
+        "SET l.created_at = i.created_at, l.effective_on = DATE(i.created_at) "
+        "WHERE l.source = 'migrate'"
+    ))
+
     # 唯一键与索引：把 status 纳入，同时去掉 active。
     # ★ 顺序有讲究：MySQL 不允许删掉「外键还靠着」的索引 ——
     #   uq_wardrobe_item 的左列 person_id 正好在替 fk_wardrobe_items_person 撑索引，
