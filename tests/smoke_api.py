@@ -654,6 +654,88 @@ def main() -> int:
         check("重复候选接口可用（只出候选，不自动合并）",
               st == 200 and "groups" in (dups or {}), str(dups)[:160])
 
+        # --- 单品状态：卖掉 → 换新（状态/原因/日期/加入时间/替换关系/历史）---
+        st, necklace = call("POST", "/api/wardrobe/items", {
+            "person_id": p["id"], "category": "accessory",
+            "name": PREFIX + "金项链", "color": "金色"})
+        check("新单品默认「在役」，并带加入时间（本地墙钟，不是 UTC）",
+              st == 201 and necklace.get("status") == "in_use"
+              and necklace.get("status_label") == "在役"
+              and bool(necklace.get("added_at")) and necklace.get("added_on") == today.isoformat(),
+              "status=%s %s" % (st, str(necklace)[:200]))
+
+        st, _ = call("PATCH", "/api/wardrobe/items/%d" % necklace["id"],
+                     {"status": "sold"}, expect=400)
+        check("改成已卖出但不写原因 → 400（离手状态原因必填）", st == 400, "status=%s" % st)
+        st, _ = call("PATCH", "/api/wardrobe/items/%d" % necklace["id"],
+                     {"status": "broke"}, expect=422)
+        check("未知状态被拒（422）", st == 422, "status=%s" % st)
+
+        sold_reason = PREFIX + "闲鱼卖掉，换了新项链和戒指"
+        st, sold = call("PATCH", "/api/wardrobe/items/%d" % necklace["id"], {
+            "status": "sold", "status_reason": sold_reason,
+            "status_changed_on": today.isoformat()})
+        hist = (sold or {}).get("status_history") or []
+        check("改状态写原因 + 生效日期，并追加历史（不覆盖）",
+              st == 200 and sold.get("status") == "sold"
+              and sold.get("status_label") == "已卖出"
+              and sold.get("status_reason") == sold_reason
+              and len(hist) == 2 and hist[0]["status"] == "sold" and hist[-1]["status"] == "in_use",
+              "status=%s %s" % (st, str(sold)[:240]))
+
+        st, hand_list = call("GET", "/api/wardrobe/items?person_id=%d" % p["id"])
+        check("已卖出的单品默认不出现在衣橱列表",
+              all(i["id"] != necklace["id"] for i in (hand_list or {}).get("items", [])),
+              str([i["name"] for i in (hand_list or {}).get("items", [])])[:160])
+        st, off_list = call("GET", "/api/wardrobe/items?person_id=%d&include_offhand=true&status=sold" % p["id"])
+        check("include_offhand + status=sold 能查到已卖掉的那条",
+              st == 200 and any(i["id"] == necklace["id"] for i in (off_list or {}).get("items", [])),
+              str(off_list)[:160])
+
+        st, new_necklace = call("POST", "/api/wardrobe/items", {
+            "person_id": p["id"], "category": "accessory",
+            "name": PREFIX + "金项链", "color": "金色"})
+        check("卖掉后同名同色可以再建（唯一键含状态，不是 500）",
+              st == 201 and new_necklace["id"] != necklace["id"],
+              "status=%s %s" % (st, str(new_necklace)[:160]))
+        st, new_ring = call("POST", "/api/wardrobe/items", {
+            "person_id": p["id"], "category": "accessory",
+            "name": PREFIX + "金戒指", "color": "金色",
+            "replaces_item_id": necklace["id"]})
+        check("新件建的时候就能标「替代了旧件」",
+              st == 201 and (new_ring.get("replaces") or {}).get("id") == necklace["id"],
+              "status=%s %s" % (st, str(new_ring)[:180]))
+        st, neck_again = call("PATCH", "/api/wardrobe/items/%d" % new_necklace["id"],
+                              {"replaces_item_id": necklace["id"]})
+        check("「替代了」也能事后补（PATCH）",
+              st == 200 and (neck_again.get("replaces") or {}).get("id") == necklace["id"],
+              "status=%s %s" % (st, str(neck_again)[:180]))
+
+        st, old_det = call("GET", "/api/wardrobe/items/%d" % necklace["id"])
+        repl = {x["id"] for x in (old_det or {}).get("replaced_by") or []}
+        check("旧件详情反向显示「被谁替代」（1 旧 → N 新）",
+              repl == {new_necklace["id"], new_ring["id"]}, str(old_det.get("replaced_by"))[:200])
+
+        st, other_item = call("POST", "/api/wardrobe/items", {
+            "person_id": her_friend["id"], "category": "accessory",
+            "name": PREFIX + "别人的项链", "color": "银色"})
+        st, _ = call("PATCH", "/api/wardrobe/items/%d" % new_ring["id"],
+                     {"replaces_item_id": other_item["id"]}, expect=400)
+        check("替换关系不能跨人（400）", st == 400, "status=%s" % st)
+        st, _ = call("PATCH", "/api/wardrobe/items/%d" % new_ring["id"],
+                     {"replaces_item_id": new_ring["id"]}, expect=400)
+        check("不能替代自己（400）", st == 400, "status=%s" % st)
+
+        st, _ = call("PATCH", "/api/wardrobe/items/%d" % necklace["id"],
+                     {"status": "in_use", "status_reason": PREFIX + "又赎回来了"}, expect=409)
+        check("改回在役但同名同色已有一件在役 → 409（不会撞唯一键变成 500）",
+              st == 409, "status=%s" % st)
+        st, back = call("PATCH", "/api/wardrobe/items/%d" % necklace["id"],
+                        {"status": "lost", "status_reason": PREFIX + "又弄丢了"})
+        check("状态可以再改（历史累计，不重置）",
+              st == 200 and back.get("status") == "lost" and len(back.get("status_history") or []) == 3,
+              "status=%s %s" % (st, str(back)[:200]))
+
         # --- 编辑（时间轴）---
         old_day = (today - dt.timedelta(days=3)).isoformat()
         st, ed = call("PATCH", "/api/events/%d" % of1["id"], {

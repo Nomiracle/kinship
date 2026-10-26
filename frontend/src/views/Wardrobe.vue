@@ -46,6 +46,15 @@
         </label>
         <span class="muted" @click="viewMode = viewMode === 'grid' ? 'list' : 'grid'">{{ viewMode === 'grid' ? '切换列表' : '切换网格' }}</span>
       </div>
+      <div class="chips" style="margin-top: 8px">
+        <van-tag
+          v-for="s in statusScopes"
+          :key="s.key"
+          :type="statusScope === s.key ? 'primary' : 'default'"
+          size="small"
+          @click="statusScope = s.key"
+        >{{ s.label }}</van-tag>
+      </div>
     </div>
 
     <!-- 去重：候选清单（只出候选，合并要你点） -->
@@ -91,7 +100,7 @@
               <span class="name"><span class="dot" :style="{ background: colorCss(it.color) }"></span> {{ label(it) }}</span>
               <span class="muted" style="font-size:11px">穿 {{ it.wear_count }} 次<span v-if="it.last_worn_on"> · 最近 {{ human(it.last_worn_on) }}</span><span v-else> · 暂无穿着记录</span></span>
             </div>
-            <span v-if="!it.active" class="muted" style="font-size:11px">（已停用）</span>
+            <span v-if="it.status && it.status !== 'in_use'" class="muted" style="font-size:11px">（{{ statusLabel(it) }}）</span>
             <span v-if="it.merged_into_id" class="muted" style="font-size:11px">（已合并）</span>
           </div>
         </div>
@@ -107,6 +116,7 @@
             <span v-else class="list-thumb ph">{{ g.label.slice(0,1) }}</span>
             <span class="dot" :style="{ background: colorCss(it.color) }"></span>
             {{ label(it) }}
+            <span v-if="it.status && it.status !== 'in_use'" class="muted">（{{ statusLabel(it) }}）</span>
             <span v-if="it.merged_into_id" class="muted">（已合并）</span>
           </span>
           <span class="muted">
@@ -132,21 +142,41 @@
           <span v-else> · 暂无穿着记录</span>
         </p>
 
-        <dl class="item-summary"><dt>类别</dt><dd>{{ store.wardrobeCategoryLabel(detail.category) }}</dd><dt>颜色</dt><dd>{{ detail.color || '未填写' }}</dd><dt>标签</dt><dd>{{ detail.tags || '未填写' }}</dd><dt>备注</dt><dd>{{ detail.notes || '未填写' }}</dd></dl>
+        <dl class="item-summary">
+          <dt>类别</dt><dd>{{ store.wardrobeCategoryLabel(detail.category) }}</dd>
+          <dt>颜色</dt><dd>{{ detail.color || '未填写' }}</dd>
+          <dt>状态</dt><dd>{{ statusLabel(detail) }}<span v-if="detail.status_reason" class="muted"> · {{ detail.status_reason }}</span><span v-if="detail.status_changed_on" class="muted"> · {{ detail.status_changed_on }}</span></dd>
+          <dt>加入衣橱</dt><dd>{{ formatAdded(detail) || '未记录' }}</dd>
+          <dt>标签</dt><dd>{{ detail.tags || '未填写' }}</dd>
+          <dt>备注</dt><dd>{{ detail.notes || '未填写' }}</dd>
+          <dt v-if="detail.replaces">替代了</dt><dd v-if="detail.replaces"><span class="link" @click="open({ id: detail.replaces.id })">{{ detail.replaces.name }}</span>（{{ detail.replaces.status_label }}）</dd>
+          <dt v-if="(detail.replaced_by || []).length">被替代</dt>
+          <dd v-if="(detail.replaced_by || []).length">
+            <span v-for="(r, i) in detail.replaced_by" :key="r.id"><span v-if="i">、</span><span class="link" @click="open({ id: r.id })">{{ r.name }}</span>（{{ r.status_label }}）</span>
+          </dd>
+        </dl>
         <div class="chips" style="margin-top: 8px">
           <van-button size="small" type="primary" plain @click="goRecord(detail.id)">
             ＋ 再穿一次（今天）
           </van-button>
           <van-button size="small" plain @click="goEdit(detail.id)">编辑页</van-button>
+          <van-button size="small" type="warning" @click="openStatus">改状态</van-button>
           <van-button size="small" @click="pickMerge = true">合并到…</van-button>
-          <van-button size="small" @click="toggleActive">
-            {{ detail.active ? '停用' : '恢复' }}
-          </van-button>
           <van-button v-if="detail.merged_into_id" size="small" type="warning" @click="unmerge">
             撤销合并
           </van-button>
           <van-button size="small" type="danger" @click="remove">删除</van-button>
         </div>
+
+        <h4>状态变更（{{ (detail.status_history || []).length }}）</h4>
+        <div v-for="h in detail.status_history || []" :key="h.id" class="wear">
+          <div class="row">
+            <span>{{ h.effective_on || h.created_at || '日期未记' }}</span>
+            <span class="muted">{{ h.status_label }}</span>
+          </div>
+          <div v-if="h.reason" class="muted">原因：{{ h.reason }}</div>
+        </div>
+        <p v-if="!(detail.status_history || []).length" class="muted">暂无状态变更记录</p>
 
         <h4>照片</h4>
         <div class="thumbs">
@@ -180,6 +210,43 @@
       </div>
     </van-popup>
 
+    <van-popup v-model:show="showStatus" position="bottom" round :style="{ height: '62%' }">
+      <div class="detail">
+        <h3>改状态 · {{ label(detail) }}</h3>
+        <p class="muted">当前：{{ statusLabel(detail) }}<span v-if="detail?.status_reason"> · {{ detail.status_reason }}</span></p>
+        <div class="chips" style="margin-top: 8px">
+          <van-tag
+            v-for="s in STATUS_OPTIONS"
+            :key="s.key"
+            :type="statusForm.status === s.key ? 'primary' : 'default'"
+            size="large"
+            @click="statusForm.status = s.key"
+          >{{ s.label }}</van-tag>
+        </div>
+        <van-field
+          v-model="statusForm.reason"
+          label="原因"
+          type="textarea"
+          rows="2"
+          autosize
+          maxlength="255"
+          show-word-limit
+          :placeholder="statusReasonHint"
+        />
+        <van-field label="生效日期">
+          <template #input>
+            <input v-model="statusForm.date" type="date" class="picker" />
+          </template>
+        </van-field>
+        <p class="muted">已卖出/送人/丢失等离手状态必须写一句原因；「换成了哪几件」在新件的编辑页里选「替代了哪件」。</p>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <van-button block plain @click="showStatus = false">取消</van-button>
+          <van-button block type="primary" :loading="savingStatus" @click="saveStatus">保存状态</van-button>
+        </div>
+        <p v-if="statusError" class="danger" style="margin:6px 0 0">{{ statusError }}</p>
+      </div>
+    </van-popup>
+
     <van-image-preview
       v-model:show="preview.show"
       :images="preview.images"
@@ -210,6 +277,14 @@ import { resolveScopedPerson, scopeQuery } from '../lib/scope'
 import { previewUrls } from '../lib/media-preview'
 import { fmtWhen } from '../lib/event-day'
 import { filterWardrobeItems, collectColors } from '../lib/wardrobe-create'
+import {
+  STATUS_OPTIONS,
+  buildStatusPatch,
+  filterByStatusScope,
+  formatAdded,
+  statusLabel,
+  validateStatusChange,
+} from '../lib/status'
 
 const store = useArchiveStore()
 const route = useRoute()
@@ -240,6 +315,23 @@ const showDup = ref(true)
 const showDetail = ref(false)
 const pickMerge = ref(false)
 const detail = ref(null)
+
+// 状态范围：默认只看「在手」；已离手要显式切过去（列表不刷新，纯前端过滤）
+const statusScope = ref('hand')
+const statusScopes = [
+  { key: 'hand', label: '在手' },
+  { key: 'in_use', label: '在役' },
+  { key: 'idle', label: '闲置' },
+  { key: 'offhand', label: '已离手' },
+  { key: 'all', label: '全部' },
+]
+const showStatus = ref(false)
+const savingStatus = ref(false)
+const statusError = ref('')
+const statusForm = reactive({ status: 'in_use', reason: '', date: '' })
+const statusReasonHint = computed(() =>
+  statusForm.status === 'sold' ? '如：闲鱼卖掉，换了新项链和戒指' : '为什么变成这个状态（离手必填）'
+)
 
 
 const COLORS = {
@@ -275,7 +367,7 @@ function thumbUrl(it) {
 }
 
 const filteredItems = computed(() =>
-  filterWardrobeItems(items.value, {
+  filterWardrobeItems(filterByStatusScope(items.value, statusScope.value), {
     category: category.value,
     color: colorFilter.value,
     q: q.value,
@@ -330,6 +422,8 @@ async function load() {
     api.wardrobeItems({
       person_id: personId,
       include_merged: true,
+      // 一次拿全（含已离手），状态切换纯前端过滤 —— 少一趟请求，且旧件不「消失」
+      include_offhand: true,
     }),
     api.wardrobeDuplicates(personId),
   ])
@@ -342,11 +436,42 @@ async function open(it) {
   showDetail.value = true
 }
 
-async function toggleActive() {
-  await api.patchWardrobeItem(detail.value.id, { active: !detail.value.active })
-  showToast(detail.value.active ? '已停用' : '已恢复')
-  showDetail.value = false
-  await load()
+function openStatus() {
+  statusError.value = ''
+  statusForm.status = detail.value?.status || 'in_use'
+  statusForm.reason = detail.value?.status_reason || ''
+  statusForm.date = detail.value?.status_changed_on || new Date().toLocaleDateString('sv-SE')
+  showStatus.value = true
+}
+
+async function saveStatus() {
+  if (savingStatus.value || !detail.value) return
+  const err = validateStatusChange({ status: statusForm.status, reason: statusForm.reason })
+  if (err) {
+    statusError.value = err
+    return
+  }
+  statusError.value = ''
+  savingStatus.value = true
+  try {
+    const patch = buildStatusPatch({
+      status: statusForm.status,
+      reason: statusForm.reason,
+      date: statusForm.date,
+    })
+    await api.patchWardrobeItem(detail.value.id, patch)
+    showToast('状态已更新')
+    showStatus.value = false
+    const id = detail.value.id
+    showDetail.value = false
+    await load()
+    detail.value = await api.wardrobeItem(id)
+    showDetail.value = true
+  } catch (e) {
+    statusError.value = e.message || '保存失败'
+  } finally {
+    savingStatus.value = false
+  }
 }
 
 async function remove() {

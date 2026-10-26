@@ -21,6 +21,16 @@
           </template>
         </van-field>
         <van-field v-model="form.tags" label="标签" placeholder="逗号分隔，如：露肩,格子（可空）" :disabled="isLocked" />
+        <van-field label="替代了">
+          <template #input>
+            <select v-model="form.replaces_item_id" class="picker" :disabled="isLocked">
+              <option :value="null">不涉及（新买的 / 本来就有）</option>
+              <option v-for="it in replaceOptions" :key="it.id" :value="it.id">
+                {{ it.name }}（{{ statusLabel(it) }}）
+              </option>
+            </select>
+          </template>
+        </van-field>
         <van-field v-model="form.notes" label="备注" type="textarea" rows="2" autosize placeholder="可空" :disabled="isLocked" />
         <p v-if="error" class="danger" style="margin:6px 0 0">{{ error }}</p>
         <p v-if="duplicate" class="warn" style="margin:6px 0 0">
@@ -63,12 +73,14 @@
 <script setup>
 import { reactive, ref, watch, computed } from 'vue'
 import { ensureFileStableKeys } from '../lib/wardrobe-create.js'
+import { statusLabel } from '../lib/status.js'
 import { useArchiveStore } from '../store.js'
 
 const props = defineProps({
   initial: { type: Object, default: null },
   persons: { type: Array, default: () => [] },
   categories: { type: Array, default: () => [] },
+  replaceCandidates: { type: Array, default: () => [] },
   effectivePersonId: { type: Number, default: null },
   saving: { type: Boolean, default: false },
   error: { type: String, default: '' },
@@ -92,7 +104,15 @@ const form = reactive({
   category: 'other',
   tags: '',
   notes: '',
+  replaces_item_id: null,
 })
+
+// 只列同一个人的、没有被合并的、不是自己的 —— 后端也会再校验一遍
+const replaceOptions = computed(() =>
+  (props.replaceCandidates || []).filter(
+    (it) => !it.merged_into_id && it.id !== props.initial?.id && it.person_id === form.person_id
+  )
+)
 
 const fileList = ref([])
 
@@ -110,6 +130,7 @@ watch(
       form.category = v.category || 'other'
       form.tags = v.tags || ''
       form.notes = v.notes || ''
+      form.replaces_item_id = v.replaces?.id ?? v.replaces_item_id ?? null
     } else {
       form.person_id = props.effectivePersonId ?? null
       form.name = ''
@@ -117,6 +138,7 @@ watch(
       form.category = 'other'
       form.tags = ''
       form.notes = ''
+      form.replaces_item_id = null
     }
     // 不在编辑初始化时清空 fileList（保留用户已选），仅新建时清空
     if (!v) {
@@ -151,6 +173,7 @@ function submit() {
     color: form.color?.trim() || null,
     tags: form.tags?.trim() || null,
     notes: form.notes?.trim() || null,
+    replaces_item_id: form.replaces_item_id || null,
   }
   emit('submit', payload, fileList.value)
 }

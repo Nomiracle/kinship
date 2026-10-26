@@ -276,6 +276,23 @@ class Media(Base):
 # 单品类别：与配置 [[wardrobe_categories]] 对应（配置缺省时用这份兜底）
 WARDROBE_CATEGORIES = ("top", "bottom", "outer", "dress", "shoes", "accessory", "bag", "other")
 
+# 单品状态：一件东西「现在在哪」。
+# 前两个 = 在手（还能穿、算重复候选、默认出现在衣橱）；其余 = 已离手（默认隐藏，可切换查看）。
+# ★ 写死在代码里、不放 config：status 直接决定列表与去重的口径，
+#   配置漂移会让「已卖掉的旧项链」被当成重复候选，静默拦下同名新项链。
+WARDROBE_STATUSES = ("in_use", "idle", "sold", "gifted", "lost", "damaged", "discarded")
+WARDROBE_STATUS_LABELS = {
+    "in_use": "在役",
+    "idle": "闲置收纳",
+    "sold": "已卖出",
+    "gifted": "已送人",
+    "lost": "已丢失",
+    "damaged": "损坏待修",
+    "discarded": "已丢弃",
+}
+WARDROBE_ON_HAND_STATUSES = ("in_use", "idle")
+WARDROBE_OFF_HAND_STATUSES = tuple(s for s in WARDROBE_STATUSES if s not in WARDROBE_ON_HAND_STATUSES)
+
 
 class WardrobeItem(Base):
     """单品档案：一件**实际存在**的衣物/配饰 = 一行，全局唯一。
@@ -306,7 +323,19 @@ class WardrobeItem(Base):
     tags: Mapped[Optional[str]] = mapped_column(String(255))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     sensitivity: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 状态：in_use 在役 / idle 闲置收纳 / sold 已卖出 / gifted 已送人 /
+    #       lost 已丢失 / damaged 损坏待修 / discarded 已丢弃（见 WARDROBE_STATUSES）
+    # ★ 当前状态只留这一个源（列表/去重要用）；变更历史在 wardrobe_item_status_log。
+    #   旧的 active 布尔已删：「两套事实」必然漂移（卖掉却没停用 = 列表与去重各说各话）。
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="in_use", server_default="in_use"
+    )
+    status_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    status_changed_on: Mapped[Optional[dt.date]] = mapped_column(Date)
+    # 替换关系：**新件**指向被它替代的旧件（1 旧 → N 新），旧件那侧按反查列出
+    replaces_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("wardrobe_items.id", ondelete="SET NULL")
+    )
     # 去重是**软删**：被合并到哪一条。作废的行不再出现在任何列表，但可回滚
     merged_into_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("wardrobe_items.id", ondelete="SET NULL")
@@ -314,17 +343,51 @@ class WardrobeItem(Base):
     first_worn_on: Mapped[Optional[dt.date]] = mapped_column(Date)
     last_worn_on: Mapped[Optional[dt.date]] = mapped_column(Date)
 
+    # ★ 时间口径：本地墙钟（Asia/Shanghai），与 events 一致，由 Python 在插入时写。
+    #   不要依赖 DB 的 CURRENT_TIMESTAMP —— 生产 MariaDB 宿主是 UTC，本机 MySQL 是 +08，
+    #   同一段代码两处跑出来的「新增时间」会差 8 小时（跨零点还会差一天）。
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.current_timestamp()
+        DateTime, nullable=False, default=dt.datetime.now,
+        server_default=func.current_timestamp(),
     )
     updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.current_timestamp()
+        DateTime, nullable=False, default=dt.datetime.now, onupdate=dt.datetime.now,
+        server_default=func.current_timestamp(),
     )
 
     __table_args__ = (
-        # 结构级防重复：同一个人 + 同类别 + 同名 + 同色 建不出第二条
-        UniqueConstraint("person_id", "category", "name", "color_key", name="uq_wardrobe_item"),
-        Index("ix_wardrobe_person_cat", "person_id", "category", "active"),
+        # 结构级防重复：同一个人 + 同类别 + 同名 + 同色 建不出第二条。
+        # ★ 状态进了唯一键：卖掉旧项链后，同名的「新项链」必须建得出来（这才是「换新」）。
+        UniqueConstraint("person_id", "category", "name", "color_key", "status",
+                         name="uq_wardrobe_item"),
+        Index("ix_wardrobe_person_cat", "person_id", "category", "status"),
+    )
+
+
+class WardrobeItemStatusLog(Base):
+    """单品状态变更历史：一件东西「什么时候、因为什么」变成现在这样。
+
+    ★ 只把**当前**状态冗余在 wardrobe_items（列表筛选要用），历史一律落这张表：
+      改一次状态追加一行、不覆盖 —— 覆盖掉原因，等于「为什么卖掉」永久丢失。
+    """
+
+    __tablename__ = "wardrobe_item_status_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("wardrobe_items.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String(255))
+    effective_on: Mapped[Optional[dt.date]] = mapped_column(Date)
+    source: Mapped[Optional[str]] = mapped_column(String(16))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now,
+        server_default=func.current_timestamp(),
+    )
+
+    __table_args__ = (
+        Index("ix_wardrobe_status_log_item", "item_id", "id"),
     )
 
 

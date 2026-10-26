@@ -87,6 +87,13 @@ test('衣橱添加与穿搭入口分开，范围不写默认且保留图片预�
   for(const pattern of [/添加衣物/, /wardrobe\/items\/new/, /wardrobe\/new/, /暂无穿着记录/, /resolveScopedPerson/, /van-image-preview/]) assert.match(wardrobe, pattern)
   assert.ok(!wardrobe.includes('setCurrentPerson'))
 })
+test('衣橱状态：改状态入口、状态筛选、加入时间与替代关系都接上（active 不再是写入口）', () => {
+  const wardrobe = code('src/views/Wardrobe.vue')
+  for(const pattern of [/改状态/, /statusScope/, /filterByStatusScope/, /include_offhand: true/, /formatAdded/, /status_history/, /replaced_by/, /buildStatusPatch/]) assert.match(wardrobe, pattern)
+  assert.ok(!/patchWardrobeItem\([^)]*active/.test(wardrobe), '不能再拿 active 当写入口')
+  const form = code('src/components/WardrobeItemForm.vue')
+  assert.match(form, /替代了/); assert.match(form, /replaces_item_id/); assert.match(form, /replaceOptions/)
+})
 test('日卡继续复用、默认折叠，发生与录入时间分别显示', () => {
   const days = code('src/components/EventDayList.vue')
   for(const pattern of [/const open = ref\(\[\]\)/, /toggleAll/, /dayThumbs\(d, 2\)/, /录入/, /发生/, /original\(e\)/]) assert.match(days, pattern)

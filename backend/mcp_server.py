@@ -433,14 +433,20 @@ def stats() -> str:
 @mcp.tool()
 @_safe
 def wardrobe_items(who: Optional[str] = None, category: Optional[str] = None,
-                   q: Optional[str] = None, include_duplicates: bool = False) -> str:
-    """衣橱：单品清单（一行一件，带「穿过几次 / 最近一次」）。
+                   q: Optional[str] = None, include_duplicates: bool = False,
+                   status: Optional[str] = None, include_offhand: bool = False) -> str:
+    """衣橱：单品清单（一行一件，带「穿过几次 / 最近一次 / 状态」）。
 
     category: top 上衣 / bottom 下装 / outer 外套马甲 / dress 裙装 /
               shoes 鞋 / accessory 配饰 / bag 包 / other 其他。
+    status: in_use 在役 / idle 闲置收纳 / sold 已卖出 / gifted 已送人 /
+            lost 已丢失 / damaged 损坏待修 / discarded 已丢弃。
+    默认只列「在手」（在役 + 闲置）；要查已卖出/送人的旧物，传 include_offhand=True。
     include_duplicates=True 时附「疑似重复」候选 —— 去重只出候选，合并必须人工确认。
     """
-    params: Dict[str, Any] = {"category": category, "q": q}
+    params: Dict[str, Any] = {"category": category, "q": q, "status": status}
+    if include_offhand:
+        params["include_offhand"] = "true"
     if who:
         params["person_id"] = _resolve(who)["id"]
     data = _call("GET", "/api/wardrobe/items", params=params) or {}
@@ -454,6 +460,12 @@ def wardrobe_items(who: Optional[str] = None, category: Optional[str] = None,
         bits.append("穿过 %s 次" % it.get("wear_count", 0))
         if it.get("last_worn_on"):
             bits.append("最近=%s" % it["last_worn_on"])
+        if it.get("status") and it["status"] != "in_use":
+            bits.append("[%s]" % (it.get("status_label") or it["status"]))
+        if it.get("status_reason"):
+            bits.append("原因=%s" % it["status_reason"])
+        if it.get("added_on"):
+            bits.append("加入=%s" % it["added_on"])
         if it.get("merged_into_id"):
             bits.append("[已合并]")
         if it.get("person_name"):
@@ -490,6 +502,20 @@ def wardrobe_item(item_id: int) -> str:
         head += "\n备注：%s" % d["notes"]
     if d.get("merged_into_id"):
         head += "\n[这条已合并到 #%s]" % d["merged_into_id"]
+    head += "\n状态：%s" % (d.get("status_label") or d.get("status"))
+    if d.get("status_reason"):
+        head += "（%s）" % d["status_reason"]
+    if d.get("status_changed_on"):
+        head += " · 自 %s" % d["status_changed_on"]
+    if d.get("added_at"):
+        head += " · 加入衣橱 %s" % d["added_at"]
+    if d.get("replaces"):
+        head += "\n替代了：#%s %s（%s）" % (
+            d["replaces"]["id"], d["replaces"]["name"], d["replaces"].get("status_label"))
+    if d.get("replaced_by"):
+        head += "\n被替代：" + "、".join(
+            "#%s %s（%s）" % (r["id"], r["name"], r.get("status_label"))
+            for r in d["replaced_by"])
     wears = d.get("wears") or []
     if not wears:
         return head + "\n还没有穿着记录（可能只是「提起过」）。"
@@ -585,6 +611,34 @@ def add_outfit(who: str, items: str, event_date: Optional[str] = None,
     names = "、".join(i["name"] for i in created["items"])
     return "已记穿搭 #%s：%s %s（引用 %d 件单品）" % (
         created["id"], _when(created), names, len(created["items"]))
+
+
+@mcp.tool()
+@_safe
+def set_wardrobe_status(item_id: int, status: str, reason: Optional[str] = None,
+                        effective_date: Optional[str] = None) -> str:
+    """改单品状态：在役 / 闲置收纳 / 已卖出 / 已送人 / 已丢失 / 损坏待修 / 已丢弃。
+
+    status: in_use / idle / sold / gifted / lost / damaged / discarded。
+    离手状态（sold/gifted/lost/damaged/discarded）建议写一句 reason（卖给谁、给了谁、
+    换成了什么）；不写也能改，但半年后没人说得清为什么。
+    effective_date: YYYY-MM-DD，不传 = 今天。每次改状态都会追加一条历史，不覆盖旧原因。
+    ★ 「卖掉又换了新的」：改完旧件状态后，新建新件时要指回旧件（网页编辑页的「替代了哪件」），
+      这样两边都能看到替换关系。
+    """
+    _require_write()
+    payload: Dict[str, Any] = {"status": status}
+    if reason:
+        payload["status_reason"] = reason
+    if effective_date:
+        payload["status_changed_on"] = effective_date
+    d = _call("PATCH", "/api/wardrobe/items/%d" % item_id, body=payload)
+    line = "已改 #%s %s → %s" % (d["id"], d["name"], d.get("status_label") or d["status"])
+    if d.get("status_reason"):
+        line += "（%s）" % d["status_reason"]
+    if d.get("status_changed_on"):
+        line += " · 自 %s" % d["status_changed_on"]
+    return line
 
 
 @mcp.tool()

@@ -19,7 +19,18 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import CommitRoute, get_session
-from ..models import Event, EventPerson, Media, OutfitWear, Person, WardrobeItem
+from ..models import (
+    Event,
+    EventPerson,
+    Media,
+    OutfitWear,
+    Person,
+    WARDROBE_OFF_HAND_STATUSES,
+    WARDROBE_ON_HAND_STATUSES,
+    WARDROBE_STATUS_LABELS,
+    WardrobeItem,
+    WardrobeItemStatusLog,
+)
 from ..schemas import (
     OutfitIn,
     WardrobeItemIn,
@@ -34,6 +45,20 @@ from ..services import idempotency as idem_svc
 from ..services.audit import write_audit
 
 router = APIRouter(prefix="/api", tags=["wardrobe"], route_class=CommitRoute)
+
+
+def _status_label(status: Optional[str]) -> Optional[str]:
+    return WARDROBE_STATUS_LABELS.get(status or "") if status else None
+
+
+def _is_on_hand(item: WardrobeItem) -> bool:
+    return item.status in WARDROBE_ON_HAND_STATUSES and item.merged_into_id is None
+
+
+def _require_reason_for(status: str, reason: Optional[str]) -> None:
+    """离手状态必须写一句原因 —— 否则半年后看到「已卖出」也没人说得清为什么。"""
+    if status in WARDROBE_OFF_HAND_STATUSES and not (reason or "").strip():
+        raise HTTPException(400, "「%s」需要写一句状态原因" % WARDROBE_STATUS_LABELS.get(status, status))
 
 
 def _names(session: Session) -> Dict[int, str]:
@@ -51,8 +76,68 @@ def _media_map(session: Session, item_ids: List[int]) -> Dict[int, List[dict]]:
     return out
 
 
+def _replace_info(session: Session, rows: List[WardrobeItem]) -> Tuple[Dict[int, dict], Dict[int, List[dict]]]:
+    """替换关系的两个方向：这件替代了谁 / 这件被谁替代（1 旧 → N 新，按反查列出）。"""
+    replaces: Dict[int, dict] = {}
+    replaced_by: Dict[int, List[dict]] = {}
+    target_ids = {r.replaces_item_id for r in rows if r.replaces_item_id}
+    targets: Dict[int, WardrobeItem] = {}
+    if target_ids:
+        targets = {t.id: t for t in session.scalars(
+            select(WardrobeItem).where(WardrobeItem.id.in_(target_ids))
+        )}
+    for r in rows:
+        t = targets.get(r.replaces_item_id) if r.replaces_item_id else None
+        if t is not None:
+            replaces[r.id] = {"id": t.id, "name": t.name, "status": t.status,
+                              "status_label": _status_label(t.status)}
+    ids = [r.id for r in rows]
+    if ids:
+        children = list(session.scalars(
+            select(WardrobeItem)
+            .where(WardrobeItem.replaces_item_id.in_(ids),
+                   WardrobeItem.merged_into_id.is_(None))
+            .order_by(WardrobeItem.id)
+        ))
+        for c in children:
+            replaced_by.setdefault(c.replaces_item_id, []).append(
+                {"id": c.id, "name": c.name, "status": c.status,
+                 "status_label": _status_label(c.status)}
+            )
+    return replaces, replaced_by
+
+
+def _status_history(session: Session, item_id: int) -> List[dict]:
+    rows = session.scalars(
+        select(WardrobeItemStatusLog)
+        .where(WardrobeItemStatusLog.item_id == item_id)
+        .order_by(WardrobeItemStatusLog.id.desc())
+    )
+    return [{
+        "id": r.id,
+        "status": r.status,
+        "status_label": _status_label(r.status),
+        "reason": r.reason,
+        "effective_on": r.effective_on,
+        "source": r.source,
+        "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else None,
+    } for r in rows]
+
+
+def _log_status(session: Session, item: WardrobeItem, status: str, reason: Optional[str],
+                effective_on: Optional[dt.date], source: str = "web") -> None:
+    session.add(WardrobeItemStatusLog(
+        item_id=item.id,
+        status=status,
+        reason=reason,
+        effective_on=effective_on or dt.date.today(),
+        source=source,
+    ))
+
+
 def _item_out(item: WardrobeItem, names: dict, count: int = 0,
-              media: Optional[list] = None) -> dict:
+              media: Optional[list] = None, replaces: Optional[dict] = None,
+              replaced_by: Optional[List[dict]] = None) -> dict:
     return {
         "id": item.id,
         "person_id": item.person_id,
@@ -64,8 +149,17 @@ def _item_out(item: WardrobeItem, names: dict, count: int = 0,
         "tags": item.tags,
         "notes": item.notes,
         "sensitivity": item.sensitivity,
-        "active": bool(item.active),
+        # 派生值：在手（在役/闲置）且未被合并 —— 旧前端与旧断言照旧能用
+        "active": _is_on_hand(item),
+        "status": item.status,
+        "status_label": _status_label(item.status),
+        "status_reason": item.status_reason,
+        "status_changed_on": item.status_changed_on,
+        "added_at": item.created_at.strftime("%Y-%m-%d %H:%M") if item.created_at else None,
+        "added_on": item.created_at.date() if item.created_at else None,
         "merged_into_id": item.merged_into_id,
+        "replaces": replaces,
+        "replaced_by": replaced_by or [],
         "first_worn_on": item.first_worn_on,
         "last_worn_on": item.last_worn_on,
         "wear_count": int(count),
@@ -165,7 +259,8 @@ def list_items(
     person_id: Optional[int] = None,
     category: Optional[str] = None,
     q: Optional[str] = None,
-    include_inactive: bool = False,
+    status: Optional[str] = None,
+    include_offhand: bool = False,
     include_merged: bool = False,
     limit: int = Query(500, ge=1, le=1000),
     session: Session = Depends(get_session),
@@ -177,8 +272,11 @@ def list_items(
         stmt = stmt.where(WardrobeItem.category == category)
     if not include_merged:
         stmt = stmt.where(WardrobeItem.merged_into_id.is_(None))
-    if not include_inactive:
-        stmt = stmt.where(WardrobeItem.active.is_(True))
+    if status:
+        stmt = stmt.where(WardrobeItem.status == status)
+    elif not include_offhand:
+        # 默认只出「在手」：已卖出/送人/丢失的不占列表，要查就显式切换
+        stmt = stmt.where(WardrobeItem.status.in_(WARDROBE_ON_HAND_STATUSES))
     if q:
         like = "%%%s%%" % q
         stmt = stmt.where(
@@ -189,9 +287,12 @@ def list_items(
     names = _names(session)
     counts = wardrobe_svc.wear_counts(session, [r.id for r in rows])
     mmedia = _media_map(session, [r.id for r in rows])
+    replaces, replaced_by = _replace_info(session, rows)
     return {
         "total": len(rows),
-        "items": [_item_out(r, names, counts.get(r.id, 0), mmedia.get(r.id)) for r in rows],
+        "items": [_item_out(r, names, counts.get(r.id, 0), mmedia.get(r.id),
+                            replaces.get(r.id), replaced_by.get(r.id))
+                  for r in rows],
     }
 
 
@@ -210,14 +311,36 @@ def get_item(item_id: int, session: Session = Depends(get_session)):
         raise HTTPException(404, "找不到该单品")
     names = _names(session)
     counts = wardrobe_svc.wear_counts(session, [item.id])
+    replaces, replaced_by = _replace_info(session, [item])
     data = _item_out(item, names, counts.get(item.id, 0),
-                     _media_map(session, [item.id]).get(item.id))
+                     _media_map(session, [item.id]).get(item.id),
+                     replaces.get(item.id), replaced_by.get(item.id))
     data["wears"] = _wear_rows(session, item.id)
+    data["status_history"] = _status_history(session, item.id)
     if item.merged_into_id:
         data["merged_into"] = _item_out(
             session.get(WardrobeItem, item.merged_into_id), names
         ) if session.get(WardrobeItem, item.merged_into_id) else None
     return data
+
+
+def _validate_replaces(session: Session, item_id: Optional[int], target_id: Optional[int],
+                       person_id: int) -> Optional[WardrobeItem]:
+    """替换关系只能指向「同一个人的、没被合并的、不是自己」的单品。"""
+    if not target_id:
+        return None
+    if item_id and target_id == item_id:
+        raise HTTPException(400, "不能让一件替代它自己")
+    target = session.get(WardrobeItem, target_id)
+    if not target:
+        raise HTTPException(404, "找不到被替代的那件单品")
+    if target.person_id != person_id:
+        raise HTTPException(400, "两件不属于同一个人")
+    if target.merged_into_id:
+        raise HTTPException(400, "被替代的那件已被合并，请选择它合并到的那条")
+    if item_id and target.replaces_item_id == item_id:
+        raise HTTPException(400, "两件互相替代（成环），请只保留一个方向")
+    return target
 
 
 @router.post("/wardrobe/items", status_code=201)
@@ -238,16 +361,20 @@ def create_item(payload: WardrobeItemIn, request: Request, session: Session = De
     session.scalar(select(Person).where(Person.id == payload.person_id).with_for_update())
     color_key = wardrobe_svc.canonical_key(payload.color)
     name_key = wardrobe_svc.canonical_key(payload.name)
-    # 防回潮：同人+同类别+同名+同色已经存在时明确报冲突，让前端问「复用吗」
+    # 防回潮：同人+同类别+同名+同色+同状态已经存在时明确报冲突，让前端问「复用吗」
+    # ★ 口径与唯一键一致（含 status）：卖掉旧项链后同名的「新项链」建得出来。
     for row in session.scalars(select(WardrobeItem).where(
         WardrobeItem.person_id == payload.person_id,
         WardrobeItem.category == payload.category,
-        WardrobeItem.active.is_(True),
+        WardrobeItem.status == payload.status,
+        WardrobeItem.merged_into_id.is_(None),
     ).with_for_update()):
         if (wardrobe_svc.canonical_key(row.name), wardrobe_svc.canonical_key(row.color)) == (name_key, color_key):
             raise HTTPException(409, detail={
                 "message": "已有同名同色单品，请复用或改名", "existing_id": row.id,
             })
+    replaced = _validate_replaces(session, None, payload.replaces_item_id, payload.person_id)
+    _require_reason_for(payload.status, payload.status_reason)
     item = WardrobeItem(
         person_id=payload.person_id,
         category=payload.category,
@@ -257,11 +384,20 @@ def create_item(payload: WardrobeItemIn, request: Request, session: Session = De
         tags=payload.tags,
         notes=payload.notes,
         sensitivity=payload.sensitivity,
+        status=payload.status,
+        status_reason=payload.status_reason,
+        status_changed_on=payload.status_changed_on,
+        replaces_item_id=replaced.id if replaced else None,
     )
     session.add(item)
     session.flush()
+    _log_status(session, item, item.status, item.status_reason,
+                item.status_changed_on or item.created_at.date(), source="web")
+    session.flush()
     write_audit(session, "wardrobe_item", item.id, "create")
-    body = _item_out(item, _names(session))
+    names = _names(session)
+    replaces, _ = _replace_info(session, [item])
+    body = _item_out(item, names, 0, None, replaces.get(item.id))
     if claim is not None:
         idem_svc.complete_claim(session, claim, 201, body)
     return body
@@ -274,16 +410,27 @@ def patch_item(item_id: int, payload: WardrobeItemPatch,
     if not item:
         raise HTTPException(404, "找不到该单品")
     data = payload.model_dump(exclude_unset=True)
-    if "name" in data or "color" in data or "category" in data:
+    old_status = item.status
+    if "status" in data and data["status"] != old_status:
+        # 状态变了 → 生效日期（没给就今天）+ 追加一条历史（原因不覆盖）
+        data.setdefault("status_changed_on", dt.date.today())
+        if data.get("status_reason") is None:
+            data["status_reason"] = item.status_reason
+    if "replaces_item_id" in data:
+        target = _validate_replaces(session, item.id, data["replaces_item_id"], item.person_id)
+        data["replaces_item_id"] = target.id if target else None
+    _require_reason_for(data.get("status", item.status), data.get("status_reason", item.status_reason))
+    if "name" in data or "color" in data or "category" in data or "status" in data:
         name = data.get("name", item.name)
         color = data.get("color", item.color)
         category = data.get("category", item.category)
+        status = data.get("status", item.status)
         name_key = wardrobe_svc.canonical_key(name)
         color_key = wardrobe_svc.canonical_key(color)
         for row in session.scalars(select(WardrobeItem).where(
             WardrobeItem.person_id == item.person_id,
             WardrobeItem.id != item.id,
-            WardrobeItem.active.is_(True),
+            WardrobeItem.status == status,
             WardrobeItem.merged_into_id.is_(None),
         )):
             if (row.category == category
@@ -294,10 +441,25 @@ def patch_item(item_id: int, payload: WardrobeItemPatch,
         data["color_key"] = color_key
     for k, v in data.items():
         setattr(item, k, v)
+    if item.status != old_status:
+        _log_status(session, item, item.status, item.status_reason, item.status_changed_on)
+    elif "status_reason" in data:
+        # 只改原因、状态没变：更新最近一条同类历史，避免「当前原因」与历史最后一条打架
+        latest = session.scalar(
+            select(WardrobeItemStatusLog)
+            .where(WardrobeItemStatusLog.item_id == item.id)
+            .order_by(WardrobeItemStatusLog.id.desc())
+        )
+        if latest is not None and latest.status == item.status:
+            latest.reason = item.status_reason
     write_audit(session, "wardrobe_item", item_id, "update")
     session.flush()
     counts = wardrobe_svc.wear_counts(session, [item.id])
-    return _item_out(item, _names(session), counts.get(item.id, 0))
+    replaces, replaced_by = _replace_info(session, [item])
+    out = _item_out(item, _names(session), counts.get(item.id, 0),
+                    None, replaces.get(item.id), replaced_by.get(item.id))
+    out["status_history"] = _status_history(session, item.id)
+    return out
 
 
 @router.delete("/wardrobe/items/{item_id}", status_code=204)
@@ -309,7 +471,7 @@ def delete_item(item_id: int, session: Session = Depends(get_session)):
         select(func.count(OutfitWear.id)).where(OutfitWear.item_id == item_id)
     ) or 0
     if used:
-        raise HTTPException(409, "这件有 %d 条穿着记录：改用「合并」或先停用，不要直接删" % used)
+        raise HTTPException(409, "这件有 %d 条穿着记录：改用「合并」或把状态改成已卖出/送人，不要直接删" % used)
     # 删行不等于删文件（媒体不受外键级联约束）；且同内容文件可能被别处引用
     rows = list(session.scalars(select(Media).where(Media.wardrobe_item_id == item_id)))
     referenced = set()
@@ -338,7 +500,7 @@ def merge_item(item_id: int, payload: WardrobeMergeIn,
         raise HTTPException(400, "不能合并到自己")
     if src.person_id != dst.person_id:
         raise HTTPException(400, "两件不属于同一个人")
-    if not src.active or src.merged_into_id:
+    if src.merged_into_id:
         raise HTTPException(400, "这条已经是作废/已合并状态")
     if dst.merged_into_id:
         raise HTTPException(400, "目标是已合并的单品，请选择它合并到的那条")
@@ -369,7 +531,6 @@ def merge_item(item_id: int, payload: WardrobeMergeIn,
     if dst.color is None and src.color:
         dst.color, dst.color_key = src.color, src.color_key
 
-    src.active = False
     src.merged_into_id = dst.id
     session.flush()
     wardrobe_svc.refresh_worn_dates(session, [dst.id, src.id])
@@ -390,7 +551,6 @@ def unmerge_item(item_id: int, session: Session = Depends(get_session)):
     if not item.merged_into_id:
         raise HTTPException(400, "这条没有被合并过")
     item.merged_into_id = None
-    item.active = True
     write_audit(session, "wardrobe_item", item_id, "unmerge")
     return _item_out(item, _names(session),
                      wardrobe_svc.wear_counts(session, [item.id]).get(item.id, 0))

@@ -26,7 +26,7 @@ export function normalizeSearch(q) {
 }
 
 // 构建创建荷载（绝不含日期）
-export function buildWardrobeItemPayload({ personId, name, category, color, tags, notes, sensitivity }) {
+export function buildWardrobeItemPayload({ personId, name, category, color, tags, notes, sensitivity, replacesItemId }) {
   const pid = personId != null ? Number(personId) : null
   const payload = {
     person_id: pid,
@@ -37,6 +37,9 @@ export function buildWardrobeItemPayload({ personId, name, category, color, tags
     notes: notes ? String(notes).trim() || null : null,
     sensitivity: sensitivity || 'normal',
   }
+  // 替换关系（新件指向被替代的旧件）：空值不发，避免 PATCH 时把已有关联清掉
+  const rid = replacesItemId != null && replacesItemId !== '' ? Number(replacesItemId) : null
+  if (rid) payload.replaces_item_id = rid
   // 清理空字符串
   if (!payload.category) payload.category = 'other'
   return payload

@@ -83,7 +83,8 @@ const newName = ref('')
 const newColor = ref('')
 
 const pickCategoryLabel = computed(()=> store.wardrobeCategoryLabel(pickCategory.value))
-const itemsOfCategory = computed(()=> wardrobeItems.value.filter(i=> i.category===pickCategory.value && !i.merged_into_id))
+// 可选清单只出「在手」的；已卖出/送人的仍留在 wardrobeItems 里，供历史穿搭回显名字与照片
+const itemsOfCategory = computed(()=> wardrobeItems.value.filter(i=> i.category===pickCategory.value && !i.merged_into_id && (i.status==='in_use'||i.status==='idle')))
 const pickedAll = computed(()=> picked.value.length + newItems.value.length)
 
 function nameOf(itemId){ const it=wardrobeItems.value.find(x=>x.id===itemId); return it? it.name : '#'+itemId }
@@ -101,7 +102,7 @@ function addNew(){
   newName.value=''; newColor.value=''
 }
 async function loadItems(){
-  try{ const res=await api.wardrobeItems({ person_id: props.personId }); wardrobeItems.value=res.items||[] }catch{ wardrobeItems.value=[] }
+  try{ const res=await api.wardrobeItems({ person_id: props.personId, include_offhand: true }); wardrobeItems.value=res.items||[] }catch{ wardrobeItems.value=[] }
   applyPreselect()
   applyInitial()
 }

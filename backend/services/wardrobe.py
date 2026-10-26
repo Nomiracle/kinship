@@ -20,7 +20,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Event, OutfitWear, Person, WardrobeItem
+from ..models import (
+    Event,
+    OutfitWear,
+    Person,
+    WARDROBE_ON_HAND_STATUSES,
+    WardrobeItem,
+)
 
 # 穿搭排版顺序（上 → 下 → 外套/裙装 → 鞋 → 配饰）
 SLOT_ORDER = ("top", "bottom", "outer", "dress", "shoes", "accessory", "bag", "other")
@@ -76,15 +82,19 @@ def item_key(name: Optional[str], color: Optional[str]) -> Tuple[str, str]:
 
 
 def find_item(session: Session, person_id: int, category: str, name: str,
-              color: Optional[str] = None, include_inactive: bool = False) -> Optional[WardrobeItem]:
-    """按唯一键（人 + 类别 + 名 + 色）找已有单品 —— 记录页新建前先查，防重复建。"""
+              color: Optional[str] = None, include_offhand: bool = False) -> Optional[WardrobeItem]:
+    """按唯一键（人 + 类别 + 名 + 色）找已有单品 —— 记录页新建前先查，防重复建。
+
+    ★ 默认只在「在手」里找：已卖掉的旧项链不该被当成「这件已经存在」而拒绝新建同款。
+    """
     name_key, color_key = item_key(name, color)
     stmt = select(WardrobeItem).where(
         WardrobeItem.person_id == person_id,
         WardrobeItem.category == category,
     )
-    if not include_inactive:
-        stmt = stmt.where(WardrobeItem.active.is_(True), WardrobeItem.merged_into_id.is_(None))
+    if not include_offhand:
+        stmt = stmt.where(WardrobeItem.status.in_(WARDROBE_ON_HAND_STATUSES),
+                          WardrobeItem.merged_into_id.is_(None))
     for row in session.scalars(stmt.with_for_update()):
         if item_key(row.name, row.color) == (name_key, color_key):
             return row
@@ -245,7 +255,8 @@ def duplicate_candidates(session: Session, person_id: Optional[int] = None) -> L
     仅名字相似（宝蓝 / 浅蓝）**刻意不输出**：它们是两件，列出来只是噪音。
     """
     stmt = select(WardrobeItem).where(
-        WardrobeItem.active.is_(True), WardrobeItem.merged_into_id.is_(None)
+        WardrobeItem.status.in_(WARDROBE_ON_HAND_STATUSES),
+        WardrobeItem.merged_into_id.is_(None),
     )
     if person_id:
         stmt = stmt.where(WardrobeItem.person_id == person_id)

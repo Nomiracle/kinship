@@ -31,7 +31,7 @@ EXPECTED_TOOLS = {
     "upcoming", "todos", "cycle_prediction", "stats", "wardrobe_items", "wardrobe_item",
     # 写
     "add_event", "add_todo", "todo_done", "add_attribute", "add_cycle", "add_person",
-    "add_outfit",
+    "add_outfit", "set_wardrobe_status",
 }
 
 PASS, FAIL = [], []
@@ -185,6 +185,16 @@ async def main() -> None:
                 r = text_of(await session.call_tool("wardrobe_items",
                                                     {"who": TEST_NAME, "include_duplicates": True}))
                 check("wardrobe_items 可附疑似重复候选", "MCP冒烟" in r, r[:240])
+
+                r = text_of(await session.call_tool("set_wardrobe_status", {
+                    "item_id": items[0]["id"], "status": "idle",
+                    "reason": "换季收起来"}))
+                check("set_wardrobe_status 改状态（回显状态名）", "闲置收纳" in r, r[:200])
+                r = text_of(await session.call_tool("wardrobe_items",
+                                                    {"who": TEST_NAME, "status": "idle"}))
+                check("按状态筛单品", "闲置收纳" in r and "共 1 件" in r, r[:240])
+                r = text_of(await session.call_tool("set_wardrobe_status", {
+                    "item_id": items[0]["id"], "status": "in_use"}))
 
                 # 模块开关只在网页端拦；服务端与 MCP 都不校验（有意为之，见 add_event 文档）
                 r = text_of(await session.call_tool("add_event", {

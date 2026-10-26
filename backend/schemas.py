@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .models import WARDROBE_STATUSES
+
 ORM = ConfigDict(from_attributes=True)
 
 
@@ -443,6 +445,19 @@ class WardrobeItemIn(BaseModel):
     tags: Optional[str] = None
     notes: Optional[str] = None
     sensitivity: str = "normal"
+    # 新建时就可以带状态（补记一件已卖掉/送人的东西），默认在役
+    status: str = "in_use"
+    status_reason: Optional[str] = Field(default=None, max_length=255)
+    status_changed_on: Optional[dt.date] = None
+    # 替换关系：这件是「换来的」，指向被替代的旧件
+    replaces_item_id: Optional[int] = None
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v: str) -> str:
+        if v not in WARDROBE_STATUSES:
+            raise ValueError("status 只能是：%s" % " / ".join(WARDROBE_STATUSES))
+        return v
 
 
 class WardrobeItemPatch(BaseModel):
@@ -452,7 +467,17 @@ class WardrobeItemPatch(BaseModel):
     tags: Optional[str] = None
     notes: Optional[str] = None
     sensitivity: Optional[str] = None
-    active: Optional[bool] = None
+    status: Optional[str] = None
+    status_reason: Optional[str] = Field(default=None, max_length=255)
+    status_changed_on: Optional[dt.date] = None
+    replaces_item_id: Optional[int] = None
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in WARDROBE_STATUSES:
+            raise ValueError("status 只能是：%s" % " / ".join(WARDROBE_STATUSES))
+        return v
 
 
 class WardrobeWearOut(BaseModel):
@@ -477,8 +502,18 @@ class WardrobeItemOut(BaseModel):
     tags: Optional[str] = None
     notes: Optional[str] = None
     sensitivity: str
-    active: bool
+    # ★ active 只是派生值（在手 且 未合并），保留给旧前端/旧断言；不要再当写入口
+    active: bool = True
+    status: str = "in_use"
+    status_label: Optional[str] = None
+    status_reason: Optional[str] = None
+    status_changed_on: Optional[dt.date] = None
+    # 加入衣橱的时间（本地墙钟，'YYYY-MM-DD HH:MM'）与日期
+    added_at: Optional[str] = None
+    added_on: Optional[dt.date] = None
     merged_into_id: Optional[int] = None
+    replaces: Optional[Dict] = None
+    replaced_by: List[Dict] = Field(default_factory=list)
     first_worn_on: Optional[dt.date] = None
     last_worn_on: Optional[dt.date] = None
     wear_count: int = 0
@@ -487,6 +522,7 @@ class WardrobeItemOut(BaseModel):
 
 class WardrobeItemDetail(WardrobeItemOut):
     wears: List[WardrobeWearOut] = Field(default_factory=list)
+    status_history: List[Dict] = Field(default_factory=list)
 
 
 class WardrobeMergeIn(BaseModel):
