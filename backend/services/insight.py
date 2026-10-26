@@ -208,7 +208,8 @@ def today_card(session: Session, today: Optional[dt.date] = None,
             )
         }
         last_seen = session.scalar(
-            select(func.max(Interaction.occurred_on)).where(Interaction.person_id == p.id)
+            select(func.max(func.coalesce(Interaction.ended_on, Interaction.occurred_on)))
+            .where(Interaction.person_id == p.id)
         )
         entry: Dict[str, Any] = {
             "id": p.id,
@@ -427,7 +428,8 @@ def overview(session: Session, today: Optional[dt.date] = None) -> Dict[str, Any
     per_person = []
     for p in session.scalars(select(Person).order_by(Person.sort_order, Person.id)):
         last_seen = session.scalar(
-            select(func.max(Interaction.occurred_on)).where(Interaction.person_id == p.id)
+            select(func.max(func.coalesce(Interaction.ended_on, Interaction.occurred_on)))
+            .where(Interaction.person_id == p.id)
         )
         per_person.append({
             "id": p.id,

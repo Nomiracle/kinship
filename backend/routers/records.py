@@ -60,7 +60,7 @@ def _names(session: Session) -> dict:
 
 
 def _event_out(e: Event, names: dict, media: Optional[list] = None,
-               items: Optional[list] = None) -> dict:
+               items: Optional[list] = None, meeting: Optional[dict] = None) -> dict:
     return {
         "id": e.id,
         "person_id": e.person_id,
@@ -78,6 +78,84 @@ def _event_out(e: Event, names: dict, media: Optional[list] = None,
         "created_at": e.created_at,
         "media": media or [],
         "items": items or [],
+        "meeting": meeting,
+    }
+
+
+# ---------------------------------------------------------------- 相处跨度
+
+# 手滑打出 2037 年这种事不该靠自觉，上限挡一下（超出直接 400）。
+MEETING_MAX_SPAN_DAYS = 365
+
+
+def meeting_span(day: dt.date, ended_on: Optional[dt.date]) -> tuple:
+    """(相差天数, 夜数)。单日 → (1, 0)；跨日 → (n+1, n)。"""
+    if ended_on is None or ended_on <= day:
+        return 1, 0
+    nights = (ended_on - day).days
+    return nights + 1, nights
+
+
+def _meeting_row(event_id: int, day: dt.date, extra: dict,
+                 current: Optional[dict] = None) -> dict:
+    """把事件入参里的相处字段规范化成明细行。
+
+    规则（唯一写入口，create/patch 都走这里，别再各写一套）：
+      · `ended_on` 早于开始日 → 400；跨度超上限 → 400。
+      · `ended_on` 等于开始日 → 规范成 None（单日只有一种存法）。
+      · 有跨度 → overnight 恒真（跨了夜就是过夜），hours 置空
+        （「3 天 2 晚折成 52 小时」这种数写进去只会误导统计）。
+      · 无跨度 → 沿用调用方给的 overnight / hours（老的开关语义不变）。
+    """
+    cur = current or {}
+    ended = extra["ended_on"] if "ended_on" in extra else cur.get("ended_on")
+    if ended is not None:
+        if ended < day:
+            raise HTTPException(400, "结束日期不能早于开始日期")
+        if (ended - day).days > MEETING_MAX_SPAN_DAYS:
+            raise HTTPException(400, "相处跨度不能超过 %d 天" % MEETING_MAX_SPAN_DAYS)
+        if ended == day:
+            ended = None
+    spans = ended is not None
+    overnight = True if spans else bool(
+        extra["overnight"] if "overnight" in extra else cur.get("overnight")
+    )
+    hours = None if spans else (
+        extra["hours"] if "hours" in extra else cur.get("hours")
+    )
+    location = extra["location"] if "location" in extra else cur.get("location")
+    return {
+        "event_id": event_id,
+        "occurred_on": day,
+        "ended_on": ended,
+        "location": location,
+        "overnight": overnight,
+        "hours": hours,
+    }
+
+
+def _meeting_dict(row: Interaction) -> dict:
+    days, nights = meeting_span(row.occurred_on, row.ended_on)
+    return {
+        "location": row.location,
+        "hours": float(row.hours) if row.hours is not None else None,
+        "overnight": bool(row.overnight),
+        "ended_on": row.ended_on,
+        "span_days": days,
+        "span_nights": nights,
+    }
+
+
+def _meeting_map(session: Session, events: list) -> dict:
+    """这一页里相处事件的结构化明细（一次查完，别 N+1）。"""
+    ids = [e.id for e in events if e.type_key == "meeting"]
+    if not ids:
+        return {}
+    return {
+        row.event_id: _meeting_dict(row)
+        for row in session.scalars(
+            select(Interaction).where(Interaction.event_id.in_(ids))
+        )
     }
 
 
@@ -178,7 +256,11 @@ def list_events(
     names = _names(session)
     mmedia = _media_map(session, [e.id for e in rows])
     mwears = _wear_map(session, rows)
-    items = [_event_out(e, names, mmedia.get(e.id), mwears.get(e.id)) for e in rows]
+    mmeets = _meeting_map(session, rows)
+    items = [
+        _event_out(e, names, mmedia.get(e.id), mwears.get(e.id), mmeets.get(e.id))
+        for e in rows
+    ]
     payload = {"total": int(total), "limit": limit, "offset": offset, "items": items}
     if group == "day":
         grouped: Dict[str, list] = {}
@@ -209,7 +291,7 @@ def create_event(payload: EventIn, request: Request, session: Session = Depends(
             return res
         claim = res
     data = payload.model_dump()
-    extra = {k: data.pop(k) for k in ("overnight", "location", "hours")}
+    extra = {k: data.pop(k) for k in ("overnight", "location", "hours", "ended_on")}
     data.pop("event_time", None)   # 已合并进 event_date（见 schemas.EventAtMixin）
     person_ids = data.pop("person_ids", None)
     person_id = data.get("person_id")
@@ -237,19 +319,12 @@ def create_event(payload: EventIn, request: Request, session: Session = Depends(
             session.add(CycleRecord(person_id=person_id, start_date=event.event_day,
                                     note=event.title))
     if event.type_key == "meeting" and person_id:
-        session.add(Interaction(
-            event_id=event.id,
-            person_id=person_id,
-            occurred_on=event.event_day,
-            location=extra.get("location"),
-            overnight=bool(extra.get("overnight")),
-            hours=extra.get("hours"),
-            note=event.title,
-        ))
+        row = _meeting_row(event.id, event.event_day, extra)
+        session.add(Interaction(person_id=person_id, note=event.title, **row))
 
     write_audit(session, "event", event.id, "create", source=event.source)
     session.flush()
-    body = _event_out(event, _names(session))
+    body = _event_out(event, _names(session), meeting=_meeting_map(session, [event]).get(event.id))
     if claim is not None:
         idem_svc.complete_claim(session, claim, 201, EventOut.model_validate(body).model_dump(mode="json"))
     return body
@@ -271,7 +346,7 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
         raise HTTPException(404, "找不到该记录")
     data = payload.model_dump(exclude_unset=True)
     items = data.pop("items", None)
-    extra = {k: data.pop(k) for k in ("location", "hours", "overnight") if k in data}
+    extra = {k: data.pop(k) for k in ("location", "hours", "overnight", "ended_on") if k in data}
     data.pop("event_time", None)   # 已合并进 event_date（见 schemas.EventAtMixin）
     # ★ old_day 是「日」（date）：明细表的列都是 DATE，比较/回写都要用它
     old_day = event.event_day
@@ -316,15 +391,20 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
                 Interaction.occurred_on == old_day,
             )))
         for row in rows:
+            # ★ 改日期后跨度必须重新校验：把 8/20–8/22 的开始日挪到 8/25 会变成负跨度，
+            #   静默写进去就会得到一条「结束早于开始」的明细，谁也不会发现。
+            merged = _meeting_row(event.id, event.event_day, extra, current={
+                "ended_on": row.ended_on, "location": row.location,
+                "overnight": row.overnight, "hours": row.hours,
+            })
             row.person_id = event.person_id
-            row.occurred_on = event.event_day
             row.note = event.title
-            if "location" in extra:
-                row.location = extra["location"]
-            if "overnight" in extra:
-                row.overnight = bool(extra["overnight"])
-            if "hours" in extra:
-                row.hours = extra["hours"]
+            row.event_id = event.id
+            row.occurred_on = merged["occurred_on"]
+            row.ended_on = merged["ended_on"]
+            row.location = merged["location"]
+            row.overnight = merged["overnight"]
+            row.hours = merged["hours"]
 
     # ---- 生理期：cycle_records 的唯一键是 (person_id, start_date) ----
     if event.type_key == "period" and event.event_day != old_day:
@@ -344,7 +424,8 @@ def patch_event(event_id: int, payload: EventPatch, session: Session = Depends(g
     session.flush()
     names = _names(session)
     return _event_out(event, names, _media_map(session, [event.id]).get(event.id),
-                      _wear_map(session, [event]).get(event.id))
+                      _wear_map(session, [event]).get(event.id),
+                      _meeting_map(session, [event]).get(event.id))
 
 
 @router.delete("/events/{event_id}", status_code=204)
@@ -455,7 +536,13 @@ def list_interactions(person_id: Optional[int] = None, limit: int = Query(100, g
 def create_interaction(payload: InteractionIn, session: Session = Depends(get_session)):
     if not session.get(Person, payload.person_id):
         raise HTTPException(404, "找不到这个人")
-    row = Interaction(**payload.model_dump())
+    # 直写明细的口子也要走同一套跨度规范化（跨日 → 过夜、hours 置空、同日归一）
+    norm = _meeting_row(0, payload.occurred_on, {
+        "ended_on": payload.ended_on, "location": payload.location,
+        "overnight": payload.overnight, "hours": payload.hours,
+    })
+    norm.pop("event_id", None)
+    row = Interaction(person_id=payload.person_id, note=payload.note, **norm)
     session.add(row)
     session.flush()
     write_audit(session, "interaction", row.id, "create")

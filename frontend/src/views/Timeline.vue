@@ -91,11 +91,18 @@ function setType(k){ type.value=k }
 
 async function openEdit(e){
   if(e.type_key==='meeting') {
-    try {
-      const interactions=await api.interactions(e.person_id)
-      const row=interactions.find(r=>r.event_id===e.id)
-      if(row)e={...e,location:row.location,hours:row.hours,overnight:row.overnight,meetingLoaded:true}
-    }catch { showToast('未能读取相处明细，本次保留原有地点和时长') }
+    // 首选事件自带的结构化明细（后端 _event_out 的 meeting）。
+    // ★ 老办法「拉这个人的全部 interactions 再按 event_id 猜」在改日期/跨日之后
+    //   必然错位，只作为老服务端的兜底保留。
+    const m=e.meeting
+    if(m){e={...e,location:m.location,hours:m.hours,overnight:m.overnight,ended_on:m.ended_on,meetingLoaded:true}}
+    else {
+      try {
+        const interactions=await api.interactions(e.person_id)
+        const row=interactions.find(r=>r.event_id===e.id)
+        if(row)e={...e,location:row.location,hours:row.hours,overnight:row.overnight,ended_on:row.ended_on,meetingLoaded:true}
+      }catch { showToast('未能读取相处明细，本次保留原有地点和时长') }
+    }
   }
   form.value = { ...e, media: (e.media||[]).map(m=>({ ...m })) }
   store.loadModulesFor(e.person_id)

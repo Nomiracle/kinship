@@ -120,7 +120,7 @@ alembic_command.upgrade(acfg, "head")
 # 校验最新 head
 with prod_engine.connect() as conn:
     rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert rev == "f1a2b3c4d5e6", f"alembic_version 期望 f1a2b3c4d5e6，实际 {rev}"
+    assert rev == "a7c9d1e3b5f8", f"alembic_version 期望 a7c9d1e3b5f8，实际 {rev}"
 
 # 验证 dialect 细节
 inspector = inspect(prod_engine)

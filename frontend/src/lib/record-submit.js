@@ -1,4 +1,5 @@
 import { normalizeTime } from './event-day.js'
+import { normalizeEndedOn } from './meeting-span.js'
 export function generateIdempotencyKey() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 }
@@ -6,7 +7,13 @@ export function buildEventPayload(s) {
   const p = {person_id:Number(s.personId),type_key:s.type,event_date:s.eventDate,event_time:normalizeTime(s.eventTime),title:s.title||null,body:s.body||null,tags:s.tags||null,sensitivity:s.sensitivity||'normal'}
   if(s.extraIds?.length) p.person_ids=[...new Set([Number(s.personId),...s.extraIds.map(Number)])]
   else if(s.person_ids?.length) p.person_ids=[...s.person_ids]
-  if(s.type==='meeting') Object.assign(p,{location:s.location||null,hours:s.hours===''||s.hours==null?null:Number(s.hours),overnight:!!s.overnight})
+  if(s.type==='meeting'){
+    // 跨日：结束日送后端，过夜由后端派生，hours 不手填（多日折小时只会误导统计）
+    const endedOn=normalizeEndedOn(s.eventDate,s.endedOn)
+    Object.assign(p,{location:s.location||null,ended_on:endedOn})
+    if(endedOn) Object.assign(p,{hours:null,overnight:true})
+    else Object.assign(p,{hours:s.hours===''||s.hours==null?null:Number(s.hours),overnight:!!s.overnight})
+  }
   return p
 }
 export function buildOutfitPayload(s) {
@@ -21,7 +28,7 @@ export function buildEditPayload(s) {
     if(!s.manualText) { delete p.title; delete p.body }
   }
   // Meeting details absent from older API responses must not be erased.
-  if(s.type==='meeting' && !s.meetingLoaded) { delete p.location; delete p.hours; delete p.overnight }
+  if(s.type==='meeting' && !s.meetingLoaded) { delete p.location; delete p.hours; delete p.overnight; delete p.ended_on }
   return p
 }
 export function snapshotPayload(p) { return JSON.parse(JSON.stringify(p)) }

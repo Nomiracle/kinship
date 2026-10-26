@@ -272,6 +272,39 @@ def main() -> int:
               isinstance(inter, list) and inter and inter[0].get("overnight") is True,
               str(inter))
 
+        # 跨日相处：一条记录表达「周五去、周日回」，过夜与时长由后端派生
+        # 故意放在最近：让「距上次见面」能区分「按开始日算」和「按结束日算」
+        span_start = (today - dt.timedelta(days=2)).isoformat()
+        span_end = (today - dt.timedelta(days=1)).isoformat()
+        st, e_span = call("POST", "/api/events", {
+            "person_id": p["id"], "type_key": "meeting",
+            "event_date": span_start, "ended_on": span_end,
+            "title": PREFIX + "跨日相处", "location": PREFIX + "某地", "hours": 3,
+        })
+        check("建跨日相处记录", st == 201 and (e_span.get("meeting") or {}).get("ended_on") == span_end,
+              "status=%s %s" % (st, str(e_span)[:200]))
+        if st == 201:
+            created_events.append(e_span["id"])
+            m = e_span.get("meeting") or {}
+            check("跨日相处派生：2 天 1 晚、过夜为真、hours 丢弃",
+                  m.get("span_days") == 2 and m.get("span_nights") == 1
+                  and m.get("overnight") is True and m.get("hours") is None, str(m)[:200])
+            st, tl_span = call("GET", "/api/events?person_id=%d" % p["id"])
+            hit = [x for x in (tl_span.get("items") or []) if x.get("id") == e_span["id"]]
+            check("列表里相处事件自带 meeting 块",
+                  st == 200 and hit and (hit[0].get("meeting") or {}).get("span_nights") == 1,
+                  str(hit)[:200])
+            # 改开始日把跨度改成负数 → 400，不能静默写坏明细
+            st_bad_span, _ = call("PATCH", "/api/events/%d" % e_span["id"],
+                                  {"event_date": (today + dt.timedelta(days=1)).isoformat()},
+                                  expect=400)
+            check("相处跨度改成负数被拒（400）", st_bad_span == 400, "status=%s" % st_bad_span)
+            # 「多久没见」按跨度末日算：这段相处刚结束，不该算成 10 天没见
+            st, td_span = call("GET", "/api/today?person_id=%d" % p["id"])
+            me = [x for x in (td_span.get("persons") or []) if x.get("id") == p["id"]]
+            check("距上次见面按结束日算（last_seen=跨度末日）",
+                  st == 200 and me and me[0].get("last_seen") == span_end, str(me)[:200])
+
         # --- 时间轴 / 今天 / 搜索 ---
         st, tl = call("GET", "/api/events?person_id=%d" % p["id"])
         check("时间轴返回三类记录",

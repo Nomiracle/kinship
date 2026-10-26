@@ -14,6 +14,7 @@ export function snapshotDraft(state) {
     location: state.location ?? '',
     hours: state.hours ?? '',
     overnight: !!state.overnight,
+    endedOn: state.endedOn ?? '',
     manualText: !!state.manualText,
     note: state.note ?? '',
     sensitivity: state.sensitivity ?? 'normal',
@@ -48,6 +49,7 @@ export function hasUnsavedContent(state) {
     state.note ||
     state.tags ||
     state.location ||
+    state.endedOn ||
     (state.picked && state.picked.length) ||
     (state.fileTasks && state.fileTasks.length) ||
     (state.fileList && state.fileList.length) ||
@@ -115,8 +117,11 @@ export function createInitialState({ initial, initialType, preselect } = {}) {
       : []
 
   // preserve explicit fields for edit: outfit_items, person_ids, manual_text, note/location/sensitivity
+  // 相处的结构化字段：新接口（EventOut.meeting）把它们收在 meeting 里，
+  // 老响应/老调用方放在顶层 —— 两种都要认，别让编辑面板悄悄丢地点和过夜。
+  const meeting = src.meeting || null
   const sensitivity = src.sensitivity || 'normal'
-  const location = src.location || ''
+  const location = src.location || meeting?.location || ''
   const note = src.note || ''
   // Existing schema has no persisted auto/manual flag. Preserve legacy text on
   // edit rather than silently regenerate it; users may opt back into auto text.
@@ -124,9 +129,12 @@ export function createInitialState({ initial, initialType, preselect } = {}) {
     ? !!(isUnifiedEdit && type === 'outfit' && (src.title || src.body))
     : !!src.manual_text || !!src.manualText
 
-  // hours/overnight are only for meeting type but preserve if present
-  const hours = src.hours != null && src.hours !== '' ? String(src.hours) : ''
-  const overnight = !!src.overnight
+  const hoursRaw = src.hours != null && src.hours !== '' ? src.hours : (meeting?.hours ?? '')
+  const hours = hoursRaw != null && hoursRaw !== '' ? String(hoursRaw) : ''
+  const overnight = src.overnight != null ? !!src.overnight : !!meeting?.overnight
+  // 跨日相处的结束日：新接口放在 meeting.ended_on，老接口可能在顶层
+  const endedOnRaw = meeting?.ended_on ?? src.ended_on ?? ''
+  const endedOn = endedOnRaw ? String(endedOnRaw).slice(0, 10) : ''
 
   return {
     personId,
@@ -139,6 +147,7 @@ export function createInitialState({ initial, initialType, preselect } = {}) {
     location,
     hours,
     overnight,
+    endedOn,
     note,
     manualText,
     extraIds,
@@ -146,7 +155,7 @@ export function createInitialState({ initial, initialType, preselect } = {}) {
     fileList: [],
     fileTasks: [],
     sensitivity,
-    meetingLoaded: !!src.meetingLoaded,
+    meetingLoaded: !!src.meetingLoaded || !!meeting,
     _isUnifiedEdit: isUnifiedEdit,
   }
 }

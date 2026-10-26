@@ -46,7 +46,10 @@ def test_idempotency_table_exists_mysql(db_engine):
 def test_alembic_heads_up_to_date_real(db_engine):
     with db_engine.connect() as conn:
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert rev == "f1a2b3c4d5e6"
+    assert rev == "a7c9d1e3b5f8"
+    # interactions.ended_on（跨日相处的结束日）必须真的在 schema 里
+    cols = {c["name"] for c in inspect(db_engine).get_columns("interactions")}
+    assert "ended_on" in cols
 
 
 def test_real_migration_additive_preserves_data(db_engine):
@@ -148,7 +151,10 @@ def test_real_migration_additive_preserves_data(db_engine):
         cols = {c["name"] for c in insp2.get_columns("idempotency_keys")}
         assert {"idempotency_key", "request_hash", "scope"} <= cols
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert rev == "f1a2b3c4d5e6"
+        assert rev == "a7c9d1e3b5f8"
+        # 新列存在，且老数据没有被「回填」成别的语义（NULL = 单日）
+        inter_cols = {c["name"] for c in insp2.get_columns("interactions")}
+        assert "ended_on" in inter_cols
 
     # 4. 验证新表可写入
     s2 = SessionLocal()
@@ -165,6 +171,8 @@ def test_real_migration_additive_preserves_data(db_engine):
     alembic_command.downgrade(acfg, "b2f7c0a91d34")
     insp3 = inspect(db_engine)
     assert "idempotency_keys" not in insp3.get_table_names()
+    # 新增列必须可逆：降级后 interactions.ended_on 应该消失
+    assert "ended_on" not in {c["name"] for c in insp3.get_columns("interactions")}
     with db_engine.connect() as conn:
         assert conn.execute(text("SELECT COUNT(*) FROM persons WHERE id IN (:a, :b)").bindparams(a=pid1, b=pid2)).scalar() == 2
         assert conn.execute(text("SELECT COUNT(*) FROM events WHERE id=:eid").bindparams(eid=eid)).scalar() == 1
@@ -193,4 +201,4 @@ def test_real_migration_additive_preserves_data(db_engine):
 
     # 最终确认回到 head
     with db_engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "f1a2b3c4d5e6"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "a7c9d1e3b5f8"

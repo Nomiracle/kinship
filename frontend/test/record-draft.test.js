@@ -31,6 +31,23 @@ test('createInitialState: event_time 00:00:00 treated as empty (only date)', ()=
   assert.equal(s.eventTime,'')
 })
 
+test('createInitialState: meeting span comes from meeting.ended_on (or legacy top-level)', ()=>{
+  const fromMeeting = createInitialState({ initial:{ type_key:'meeting', event_date:'2026-08-20', meeting:{ ended_on:'2026-08-22', location:'家', hours:null, overnight:true } } })
+  assert.equal(fromMeeting.endedOn,'2026-08-22')
+  assert.equal(fromMeeting.location,'家')
+  const legacy = createInitialState({ initial:{ type_key:'meeting', event_date:'2026-08-20', ended_on:'2026-08-21' } })
+  assert.equal(legacy.endedOn,'2026-08-21')
+  const single = createInitialState({ initial:{ type_key:'meeting', event_date:'2026-08-20', meeting:{ ended_on:null } } })
+  assert.equal(single.endedOn,'')
+})
+
+test('snapshotDraft: ending date change marks the draft dirty', ()=>{
+  const base = createInitialState({ initial:{ type_key:'meeting', event_date:'2026-08-20', meeting:{ ended_on:null } } })
+  const snap = snapshotDraft(base)
+  assert.equal(isDirty(base, snap), false)
+  assert.equal(isDirty({ ...base, endedOn: '2026-08-21' }, snap), true)
+})
+
 test('createInitialState: explicit all not guessed, empty initial respects initialType', ()=>{
   const s = createInitialState({ initial: null, initialType:'period', preselect:[] })
   assert.equal(s.type,'period')

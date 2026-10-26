@@ -206,6 +206,9 @@ class EventIn(EventAtMixin):
     overnight: Optional[bool] = None
     location: Optional[str] = None
     hours: Optional[float] = None
+    # 跨日相处：结束日（只对 meeting 生效；省略/null = 单日）。
+    # 传同一天等价于单日，落库时会被规范成 NULL，避免同一语义有两种存法。
+    ended_on: Optional[dt.date] = None
     # 多个人（家庭聚会等）
     person_ids: Optional[List[int]] = None
 
@@ -223,6 +226,7 @@ class EventPatch(EventAtMixin):
     location: Optional[str] = None
     hours: Optional[float] = None
     overnight: Optional[bool] = None
+    ended_on: Optional[dt.date] = None
     # 穿搭：**全量替换**引用的单品 [{item_id} 或 {category,name,color}]。
     # 元素结构由 services.wardrobe.resolve_refs 校验，所以这里用宽松的 Dict
     # （OutfitItemRef 定义在本文件靠后的「服装」段，pydantic 在这里解析不到）
@@ -247,6 +251,10 @@ class EventOut(BaseModel):
     created_at: Optional[dt.datetime] = None
     # 穿搭事件引用的单品（其他类型为空）
     items: List[Dict] = Field(default_factory=list)
+    # 相处事件的结构化明细（其他类型为 None）。
+    # ★ 只在 EventOut 里给，前端就不必再靠「人 + 日期」去 /api/interactions 猜匹配，
+    #   那条兜底路径在改日期/跨日之后必然错位（见 Timeline 的编辑入口）。
+    meeting: Optional["MeetingOut"] = None
 
 
 # ---------------------------------------------------------------- 生理期
@@ -273,13 +281,31 @@ class CycleOut(BaseModel):
 
 # ---------------------------------------------------------------- 相处
 
+class MeetingOut(BaseModel):
+    """相处明细（events.meeting）。span_days/nights 是派生值，不落库。"""
+
+    location: Optional[str] = None
+    hours: Optional[float] = None
+    overnight: bool = False
+    ended_on: Optional[dt.date] = None
+    span_days: int = 1
+    span_nights: int = 0
+
+
 class InteractionIn(BaseModel):
     person_id: int
     occurred_on: dt.date
+    ended_on: Optional[dt.date] = None
     location: Optional[str] = None
     overnight: bool = False
     hours: Optional[float] = None
     note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_span(self):
+        if self.ended_on is not None and self.ended_on < self.occurred_on:
+            raise ValueError("结束日期不能早于开始日期")
+        return self
 
 
 class InteractionOut(BaseModel):
@@ -287,6 +313,7 @@ class InteractionOut(BaseModel):
     id: int
     person_id: int
     occurred_on: dt.date
+    ended_on: Optional[dt.date] = None
     location: Optional[str] = None
     overnight: bool
     hours: Optional[float] = None
@@ -512,3 +539,10 @@ class MediaOut(BaseModel):
     bytes: Optional[int] = None
     captured_on: Optional[dt.date] = None
     created_at: Optional[dt.datetime] = None
+
+
+# EventOut.meeting 是前向引用（MeetingOut 定义在后面）：本模块开了
+# `from __future__ import annotations`，pydantic 需要显式重建一次，
+# 否则第一次校验 EventOut 时会报 "not fully defined"。
+EventOut.model_rebuild()
+

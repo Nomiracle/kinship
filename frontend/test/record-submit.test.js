@@ -6,6 +6,22 @@ const initial={personId:1,type:'text',eventDate:'2026-10-21',eventTime:'',title:
 test('API payload separates date and optional time, multi-person and meeting fields',()=>{const p=buildEventPayload({...initial,type:'meeting',hours:'2.5',location:'synthetic',overnight:true,extraIds:[2]});assert.equal(p.event_time,null);assert.equal(p.hours,2.5);assert.deepEqual(p.person_ids,[1,2]);assert.equal(buildEventPayload({...initial,eventTime:'12:34'}).event_time,'12:34:00')})
 test('Outfit uses actual items API contract; edit auto-text is omitted for regeneration',()=>{const s={...initial,type:'outfit',manualText:false,picked:[{item_id:7},{name:'synthetic',category:'top'}]};const p=buildOutfitPayload(s);assert.deepEqual(p.items,[{item_id:7},{category:'top',name:'synthetic',color:null}]);assert.equal(p.title,null);const e=buildEditPayload(s);assert.ok(!('title'in e));assert.ok(!('body'in e));assert.ok(!('person_id'in e));assert.ok(!('type_key'in e));assert.ok(!('outfit_items'in e));assert.equal(buildEditPayload({...s,manualText:true,title:'manual'}).title,'manual')})
 test('Unknown meeting fields are omitted, loaded structured fields may be edited',()=>{assert.ok(!('location'in buildEditPayload({...initial,type:'meeting'})));assert.equal(buildEditPayload({...initial,type:'meeting',meetingLoaded:true,location:'there'}).location,'there')})
+test('Meeting span sends ended_on and drops hours; single day keeps hours and sends no ended_on',()=>{
+  const spanned=buildEventPayload({...initial,type:'meeting',eventDate:'2026-08-20',endedOn:'2026-08-22',hours:'3',overnight:false})
+  assert.equal(spanned.ended_on,'2026-08-22')
+  assert.equal(spanned.hours,null)
+  assert.equal(spanned.overnight,true)
+  const single=buildEventPayload({...initial,type:'meeting',eventDate:'2026-08-20',endedOn:'',hours:'3',overnight:false})
+  assert.equal(single.ended_on,null)
+  assert.equal(single.hours,3)
+  assert.equal(single.overnight,false)
+  // 结束日不晚于开始日：等价于单日，不能把非法跨度送给后端
+  const backwards=buildEventPayload({...initial,type:'meeting',eventDate:'2026-08-20',endedOn:'2026-08-19'})
+  assert.equal(backwards.ended_on,null)
+  // 编辑老响应（没有 meeting 块）时不许把 ended_on 擦成 null
+  assert.ok(!('ended_on'in buildEditPayload({...initial,type:'meeting',endedOn:'2026-08-22'})))
+  assert.equal(buildEditPayload({...initial,type:'meeting',meetingLoaded:true,eventDate:'2026-08-20',endedOn:'2026-08-22'}).ended_on,'2026-08-22')
+})
 test('Keys are ASCII short unique and payload snapshots deep-copy',()=>{const a=generateIdempotencyKey(),b=generateIdempotencyKey();assert.notEqual(a,b);assert.match(a,/^[a-zA-Z0-9._-]{8,128}$/);const p={a:{b:1}},s=snapshotPayload(p);p.a.b=3;assert.equal(s.a.b,1)})
 test('Attachment retry keeps file UUID and never falls back keyless',async()=>{const tasks=createAttachmentTasks([{name:'长文件名.png'},{name:'two.png'}]);let calls=[];const api={uploadMedia:async(f,o)=>{calls.push([f,o]);if(f===tasks[0].file)throw new Error('unknown idempotency')}};const r=await uploadAttachments(api,tasks,{person_id:1,event_id:8,captured_on:'2026-10-21'});assert.equal(calls.length,2);assert.equal(r.failed.length,1);const key=r.failed[0].task.key;await uploadAttachments({uploadMedia:async(f,o)=>assert.equal(o.idempotency_key,key)},r.failed.map(f=>f.task),{person_id:1,event_id:8});assert.match(key,/^[\w-]{8,128}$/)})
 test('Reactive real manager: double click is one POST; input mutation cannot drift snapshot',async()=>{const m=reactive(createSubmissionManager());let resolve,postCount=0;const wait=new Promise(r=>resolve=r);const p=buildEventPayload(initial);m.begin({payload:p,typeKey:'text',tasks:[],personId:1,capturedOn:initial.eventDate});const key=m.key;const api={createEvent:async(body,k)=>{postCount++;assert.equal(k,key);assert.equal(body.person_id,1);await wait;return{id:5}},uploadMedia:async()=>{}};const one=m.run(api);const two=await m.run(api);assert.equal(two,null);p.person_id=99;assert.equal(m.snapshot.person_id,1);resolve();await one;assert.equal(postCount,1);assert.equal(m.status,'success');assert.equal(m.snapshot,null)})

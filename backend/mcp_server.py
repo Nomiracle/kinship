@@ -515,12 +515,15 @@ def add_event(who: str, title: str, type_key: str = "text",
               body: Optional[str] = None,
               tags: Optional[str] = None, location: Optional[str] = None,
               overnight: Optional[bool] = None, hours: Optional[float] = None,
+              ended_on: Optional[str] = None,
               also_with: Optional[str] = None) -> str:
     """给某人记一条记录（不指定日期就是今天；不指定时间就记此刻）。
 
     type_key: text 文字 / outfit 服装 / period 生理期 / meeting 相处 / gift 礼物 /
     health 健康 / mood 情绪 / milestone 里程碑 / contact 联系 / hobby 爱好 / social 社交。
     event_date: YYYY-MM-DD；event_time: HH:MM 或 HH:MM:SS（记到过去某天又没说时间 → 只记到日）。
+    ended_on: 仅 meeting 用，跨日相处的结束日 YYYY-MM-DD（不传 = 单日）。
+      跨日记录自动算过夜、忽略 hours；与 event_date 同一天等价于不传。
     注意：模块开关只在网页端做拦截，服务端与这里都不校验 —— 传了这个人没开的类型
     也会写进去，请自己确认类型合适（拿不准就先 person() 看模块）。
     also_with: 同时在场的人（三人场合），逗号分隔姓名。
@@ -534,7 +537,8 @@ def add_event(who: str, title: str, type_key: str = "text",
         "body": body, "tags": tags, "source": "mcp",
     }
     if type_key == "meeting":
-        payload.update({"location": location, "overnight": overnight, "hours": hours})
+        payload.update({"location": location, "overnight": overnight, "hours": hours,
+                        "ended_on": ended_on})
     if also_with:
         ids = [p["id"]] + [_resolve(x.strip())["id"] for x in also_with.replace("、", ",").split(",") if x.strip()]
         payload["person_ids"] = sorted(set(ids))

@@ -20,7 +20,7 @@
         <div class="chips"><van-button size="small" plain @click="draft.eventTime=nowLocalTime()">此刻</van-button><van-button v-if="draft.eventTime" size="small" plain @click="draft.eventTime=''">只记到日（清掉时间）</van-button></div>
         <p class="muted">发生：{{ draft.eventDate }} {{ draft.eventTime || '仅记日期，不代表凌晨' }}</p>
       </section>
-      <section class="card"><h3>内容</h3><EventFields v-if="draft.type!=='outfit'" :type="draft.type" :title="draft.title" :body="draft.body" :tags="draft.tags" :location="draft.location" :hours="draft.hours" :overnight="draft.overnight" :disabled="frozen" @update:title="draft.title=$event" @update:body="draft.body=$event" @update:tags="draft.tags=$event" @update:location="draft.location=$event" @update:hours="draft.hours=$event" @update:overnight="draft.overnight=$event" />
+      <section class="card"><h3>内容</h3><EventFields v-if="draft.type!=='outfit'" :type="draft.type" :title="draft.title" :body="draft.body" :tags="draft.tags" :location="draft.location" :hours="draft.hours" :overnight="draft.overnight" :ended-on="draft.endedOn" :event-date="draft.eventDate" :disabled="frozen" @update:title="draft.title=$event" @update:body="draft.body=$event" @update:tags="draft.tags=$event" @update:location="draft.location=$event" @update:hours="draft.hours=$event" @update:overnight="draft.overnight=$event" @update:ended-on="draft.endedOn=$event" />
         <RecordAttachments :media-enabled="mediaEnabled" :file-tasks="draft.fileTasks" :existing-media="existingMedia" :disabled="frozen" @update:fileTasks="draft.fileTasks=$event" @preview="openPreview" @remove="removeMedia" />
       </section>
     </fieldset>
@@ -47,6 +47,7 @@ import {resolveScopedPerson,normalizePersonId} from '../../lib/scope.js'
 import {availableEventTypes} from '../../lib/modules.js'
 import {todayStr,nowLocalTime,fmtWhen} from '../../lib/event-day.js'
 import {createInitialState,snapshotDraft,isDirty,saveSessionDraft,loadSessionDraft,clearSessionDraft} from '../../lib/record-draft.js'
+import {spanError} from '../../lib/meeting-span.js'
 import {buildEventPayload,buildOutfitPayload,buildEditPayload,createSubmissionManager} from '../../lib/record-submit.js'
 import {previewUrls} from '../../lib/media-preview.js'
 import OutfitForm from '../OutfitForm.vue'
@@ -95,6 +96,7 @@ async function submit(){
   if(busy.value||switching.value||initializing.value)return
   if(!draft.personId)return showToast('先选一个人')
   if(!draft.eventDate)return showToast('先选日期')
+  if(draft.type==='meeting'){const spanIssue=spanError(draft.eventDate,draft.endedOn);if(spanIssue)return showToast(spanIssue)}
   if(draft.type==='outfit'&&outfitUnavailable.value&&!isEdit.value)return showToast('请先开启服装模块')
   error.value=''
   if(!submission.snapshot){
@@ -112,7 +114,7 @@ async function submit(){
     if(result.status==='partial'){draft.fileTasks=submission.fileTasks;showToast('记录已保存，图片待重试');return}
     showToast(isEdit.value?'已保存':'已记录')
     draft.fileTasks=[]
-    if(!isEdit.value){draft.title='';draft.body='';draft.tags='';draft.location='';draft.hours='';draft.overnight=false;draft.note='';draft.picked=[];draft.manualText=false;draft.extraIds=[];setToday()}
+    if(!isEdit.value){draft.title='';draft.body='';draft.tags='';draft.location='';draft.hours='';draft.overnight=false;draft.endedOn='';draft.note='';draft.picked=[];draft.manualText=false;draft.extraIds=[];setToday()}
     baseline.value=snapshotDraft(draft)
     if(props.sessionKey)clearSessionDraft(draftKey.value)
     emit('saved',result.record)

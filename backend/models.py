@@ -388,6 +388,9 @@ class Interaction(Base):
         ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
     )
     occurred_on: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    # 跨日相处的「结束日」：NULL = 单日（等价于 ended_on == occurred_on）
+    # ★ 时间轴的锚点仍是 occurred_on，ended_on 只描述跨度；不要把它当第二个事件日。
+    ended_on: Mapped[Optional[dt.date]] = mapped_column(Date)
     location: Mapped[Optional[str]] = mapped_column(String(128))
     overnight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     hours: Mapped[Optional[float]] = mapped_column(Numeric(4, 1))

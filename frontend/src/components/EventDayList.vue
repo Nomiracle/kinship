@@ -62,6 +62,8 @@
               </span>
             </div>
             <div v-if="e.title"><strong>{{ e.title }}</strong></div>
+            <!-- 跨日相处：一条记录覆盖多天，卡片上要看出跨度，别再以为只记了一天 -->
+            <div v-if="spanOf(e)" class="muted span-label">{{ spanOf(e) }}</div>
             <div v-if="e.items && e.items.length" class="chips" style="margin-top: 6px">
               <van-tag v-for="it in e.items" :key="it.item_id" size="medium" plain>
                 {{ itemLabel(it) }}<span v-if="it.color" class="muted"> · {{ it.color }}</span>
@@ -109,6 +111,7 @@ import {
   groupByDay,
   typeSummary,
 } from '../lib/event-day'
+import { spanLabel } from '../lib/meeting-span'
 
 const props = defineProps({
   // 后端 GET /api/events?group=day 的 items（扁平、已按日期倒序）
@@ -128,6 +131,7 @@ const props = defineProps({
 })
 
 defineEmits(['edit', 'delete', 'preview'])
+const spanOf = (e) => spanLabel(e)
 
 const store = useArchiveStore()
 function original(e) { return props.items.find(row => row.id === e.id) || e }
