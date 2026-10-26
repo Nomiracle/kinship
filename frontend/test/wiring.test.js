@@ -97,3 +97,17 @@ test('设计 token 与必要 Vant 图标样式显式引入', () => {
   assert.match(main, /import 'vant\/es\/icon\/style'/); assert.match(main, /import '.\/styles\/tokens.css'/)
   assert.match(src('src/styles/tokens.css'), /--accent:/)
 })
+test('相处跨日：开关+结束日期串到草稿与 payload，编辑优先用事件自带的 meeting', () => {
+  const fields = code('src/components/records/EventFields.vue')
+  // 结束日期是独立 prop/emit，别直接改 draft（父级才是唯一真源）
+  assert.match(fields, /endedOn: \{ type: String, default: '' \}/)
+  assert.match(fields, /'update:endedOn'/)
+  for(const pattern of [/跨天/, /结束日期/, /toggleSpan/, /spanInfo/, /spanError/]) assert.match(fields, pattern)
+  const composer = code('src/components/records/RecordComposer.vue')
+  for(const pattern of [/ended-on="draft\.endedOn"/, /@update:ended-on="draft\.endedOn=\$event"/, /event-date="draft\.eventDate"/, /spanError\(draft\.eventDate,draft\.endedOn\)/]) assert.match(composer, pattern)
+  const timeline = code('src/views/Timeline.vue')
+  // 老兜底（拉全量 interactions 按 event_id 猜）只能留在 else 分支里
+  assert.match(timeline, /const m=e\.meeting/)
+  assert.ok(timeline.indexOf('const m=e.meeting') < timeline.indexOf('api.interactions(e.person_id)'))
+  assert.match(code('src/lib/record-submit.js'), /ended_on:endedOn/)
+})
