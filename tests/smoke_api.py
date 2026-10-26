@@ -304,6 +304,14 @@ def main() -> int:
             me = [x for x in (td_span.get("persons") or []) if x.get("id") == p["id"]]
             check("距上次见面按结束日算（last_seen=跨度末日）",
                   st == 200 and me and me[0].get("last_seen") == span_end, str(me)[:200])
+            # 用完就删：下面「删相处事件后无孤儿」是拿 PREFIX 全量扫的，
+            # 留着这条跨日记录会让那条断言看起来像失败（实际是另一条测试数据还在）
+            call("DELETE", "/api/events/%d" % e_span["id"], expect=204)
+            created_events.remove(e_span["id"])
+            st, inter_span = call("GET", "/api/interactions?person_id=%d" % p["id"])
+            check("删跨日相处事件后明细也跟着走",
+                  st == 200 and not any((i.get("note") or "") == PREFIX + "跨日相处"
+                                        for i in (inter_span or [])), str(inter_span)[:200])
 
         # --- 时间轴 / 今天 / 搜索 ---
         st, tl = call("GET", "/api/events?person_id=%d" % p["id"])
